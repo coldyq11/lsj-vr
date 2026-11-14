@@ -28,6 +28,10 @@
   #toggle{position:absolute;top:12px;left:12px;display:none;background:rgba(12,22,32,.85);color:#fff;border:0;border-radius:10px;padding:8px 12px;cursor:pointer}
   #cross{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#fff;font-size:22px;text-shadow:0 0 3px #000;pointer-events:none;display:none}
   #hint{position:absolute;left:50%;top:calc(50% + 28px);transform:translateX(-50%);color:#fff;background:rgba(0,0,0,.55);padding:4px 10px;border-radius:6px;font-size:13px;pointer-events:none;display:none}
+  #toast{position:absolute;left:50%;top:18%;transform:translateX(-50%);color:#fff;background:rgba(12,22,32,.85);padding:8px 16px;border-radius:10px;font-size:15px;font-weight:600;pointer-events:none;display:none}
+  #tplist{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:6px 0}
+  #tplist button{border:0;border-radius:7px;padding:6px 7px;background:#1d2b38;color:#e8eef3;font:inherit;font-size:12px;cursor:pointer;text-align:left}
+  #tplist button:hover{background:#2f6f73}
   @media (max-width:600px){#panel{width:calc(100% - 56px)}}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/mqtt@5.16.1/dist/mqtt.min.js"></script>
@@ -40,7 +44,7 @@
 </head>
 <body>
 <button id="toggle">☰ Mapa</button>
-<div id="cross">+</div><div id="hint"></div>
+<div id="cross">+</div><div id="hint"></div><div id="toast"></div>
 <div id="panel">
   <button id="hide" style="float:right;background:none;border:0;color:#9fb3c2;cursor:pointer;font-size:16px">✕</button>
   <h1>Little Saint James</h1>
@@ -53,13 +57,18 @@
     <div class="row"><input id="code" placeholder="KOD" maxlength="4" style="text-transform:uppercase"><button class="b" id="btnJoin">Dołącz</button></div>
     <p id="net">Offline</p>
   </details>
+  <details open>
+    <summary>Szybka podróż (teleport)</summary>
+    <div id="tplist"></div>
+  </details>
   <ul id="places"></ul>
   <details>
     <summary>Sterowanie</summary>
     <p><b>Mapa:</b> lewy przycisk – obrót, prawy – przesuwanie, kółko – zoom, klik na liście – przelot.</p>
-    <p><b>Spacer:</b> kliknij w obraz (mysz się zablokuje, <kbd>Esc</kbd> zwalnia), <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> – ruch, <kbd>Shift</kbd> – bieg, <kbd>E</kbd> lub klik – użyj (automaty).</p>
+    <p><b>Spacer:</b> kliknij w obraz (mysz się zablokuje, <kbd>Esc</kbd> zwalnia), <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> – ruch, <kbd>Shift</kbd> – bieg, <kbd>E</kbd> lub klik – użyj (automaty), <kbd>1</kbd>–<kbd>9</kbd> – teleport.</p>
     <p><b>VR (Quest 2):</b> <kbd>ENTER VR</kbd> na dole. Startujesz w skali 1:1 na przystani.<br>
     Lewa gałka – chodzenie, prawa – skręt o 30°<br>
+    <kbd>B</kbd>/<kbd>Y</kbd> – szybka podróż do kolejnego miejsca<br>
     <kbd>spust</kbd> na przycisku/dźwigni automatu – gra; w innym miejscu przytrzymaj i puść = teleport<br>
     <kbd>A</kbd>/<kbd>X</kbd> – tryb: 1:1 → makieta → olbrzym (w makiecie gałka obraca i skaluje)</p>
   </details>
@@ -326,7 +335,7 @@ function hollow(o) {
   const t = 0.3, H = o.h, hw = o.w / 2, hd = o.d / 2;
   let gmax = -Infinity;
   for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) gmax = Math.max(gmax, hLSJ(o.x + i * hw, o.z + j * hd));
-  const fy = gmax + 0.25;
+  const fy = gmax + 0.4; // 15 cm nad placami (0.25), żeby powierzchnie się nie nakładały
   const floor = new THREE.Mesh(new THREE.BoxGeometry(o.w, 3, o.d), lam(o.floor)); floor.position.set(o.x, fy - 1.5, o.z);
   world.add(floor); teleportables.push(floor);
   FLOORS.push({ x0: o.x - hw, x1: o.x + hw, z0: o.z - hd, z1: o.z + hd, y: fy });
@@ -360,7 +369,7 @@ const TOP = {};
   const o = { x: S.main.x, z: S.main.z, w: 40, d: 18, h: 5, door: 's', doorW: 3, wall: 0xf1ebdd, roof: 0x2f6f73, floor: 0xc8b08a };
   const { fy, top } = hollow(o); TOP.main = top;
   const X = o.x, Z = o.z;
-  fur(9, 0.02, 7, X - 13, fy, Z, 0x8c6d5a);                                  // dywan
+  fur(9, 0.04, 7, X - 13, fy + 0.005, Z, 0x8c6d5a);                                  // dywan
   fur(1.0, 0.45, 5, X - 10, fy, Z, 0x3d4a5c, true); fur(0.3, 0.95, 5, X - 9.35, fy, Z, 0x3d4a5c);   // sofa
   fur(1.4, 0.42, 2.4, X - 13.5, fy, Z, 0x5a3d2b, true);                      // stolik
   fur(1.1, 0.45, 1.1, X - 13.5, fy, Z - 3, 0x3d4a5c, true); fur(1.1, 0.45, 1.1, X - 13.5, fy, Z + 3, 0x3d4a5c, true); // fotele
@@ -407,7 +416,7 @@ for (let i = 0; i < 3; i++) {
   COLL.push({ x: tx, z: tz, hw: 3, hd: 3, rot: 0 });
 }
 flat(S.tennis.x, S.tennis.z, 36, 18, 0.3, 0x2f7d6d, 0.05);
-flat(S.tennis.x, S.tennis.z, 24, 11, 0.32, 0x3b6fa6, 0.05);
+flat(S.tennis.x, S.tennis.z, 24, 11, 0.38, 0x3b6fa6, 0.05);
 TOP.tennis = hLSJ(S.tennis.x, S.tennis.z) + 1;
 
 // ---- lądowisko ----
@@ -688,11 +697,52 @@ function flyUpdate(dt) {
   if (fly.t >= 1) fly = null;
 }
 
+// ================= szybka podróż =================
+function safeSpot(x, z) {
+  const ok = (px, pz) => !blocked(px, pz) && groundAt(px, pz) >= WATER_LIMIT;
+  if (ok(x, z)) return { x, z };
+  for (let r = 1; r < 20; r++) for (let a = 0; a < 16; a++) { const px = x + Math.cos(a / 16 * Math.PI * 2) * r, pz = z + Math.sin(a / 16 * Math.PI * 2) * r; if (ok(px, pz)) return { x: px, z: pz }; }
+  return { x, z };
+}
+const TP = [
+  ['Przystań', SPAWN.x, SPAWN.z, SPAWN.yaw],
+  ['Kasyno', S.temple.x, S.temple.z - 2, Math.PI],
+  ['Rezydencja – salon', S.main.x - 6, S.main.z, Math.PI / 2],
+  ['Kino', S.library.x - 6, S.library.z + 5, 0],
+  ['Wzgórze ze świątynią', S.temple.x - 13, S.temple.z - 13, Math.atan2(-(S.compound.x - S.temple.x), -(S.compound.z - S.temple.z))],
+  ['Lądowisko', S.heli.x, S.heli.z, Math.PI / 2],
+  ['Kort tenisowy', S.tennis.x, S.tennis.z, 0],
+  ['Wille gościnne', S.g2.x, S.g2.z + 18, 0],
+  ['Zaplecze techniczne', S.util.x, S.util.z + 16, 0]
+].map(([name, x, z, yaw]) => ({ name, yaw, ...safeSpot(x, z) }));
+let toastT = 0;
+function toast(msg) { const el = $('toast'); el.textContent = msg; el.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => { el.style.display = 'none'; }, 1800); }
+let vrToast = null, vrToastT = 0;
+function toastVR(msg) {
+  if (vrToast) camera.remove(vrToast);
+  vrToast = labelSprite(msg, 0.6, 0.13); vrToast.position.set(0, -0.22, -1); camera.add(vrToast); vrToastT = 2;
+}
+function tpWalk(i) {
+  const t = TP[i]; if (!t) return;
+  if (mode !== 'walk') setWalk();
+  PL.x = t.x; PL.z = t.z; PL.y = groundAt(t.x, t.z); yaw = t.yaw; pitch = 0;
+  toast('Teleport: ' + t.name);
+}
+let vrTpIdx = 0;
+function tpVR(i) {
+  const t = TP[i]; if (!t) return;
+  rig.rotation.y = t.yaw;
+  teleport({ x: t.x, y: groundAt(t.x, t.z), z: t.z });
+  toastVR(t.name);
+}
+TP.forEach((t, i) => { const b = document.createElement('button'); b.textContent = `${i + 1}. ${t.name}`; b.onclick = () => { if (renderer.xr.isPresenting) tpVR(i); else tpWalk(i); }; $('tplist').appendChild(b); });
+
 // ================= tryb spaceru (komputer) =================
 let mode = 'desk';
 const KEYS = {}, PL = { x: SPAWN.x, y: 0, z: SPAWN.z }; let yaw = SPAWN.yaw, pitch = 0, dragging = false;
 const centerRay = new THREE.Raycaster(); centerRay.far = 3;
-addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; KEYS[e.code] = true; if (e.code === 'KeyE' && mode === 'walk') interactCenter(); });
+addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; KEYS[e.code] = true; if (e.code === 'KeyE' && mode === 'walk') interactCenter();
+  const dg = /^Digit([1-9])$/.exec(e.code); if (dg && !renderer.xr.isPresenting) tpWalk(Number(dg[1]) - 1); });
 addEventListener('keyup', e => { KEYS[e.code] = false; });
 addEventListener('blur', () => { for (const k in KEYS) KEYS[k] = false; });
 const canvasEl = renderer.domElement;
@@ -825,6 +875,9 @@ function handleInput(dt) {
     const a = !!(gp.buttons[4] && gp.buttons[4].pressed);
     if (a && !c.userData.prevA) { const order = ['life', 'table', 'giant']; applyMode(order[(order.indexOf(mode) + 1) % 3]); }
     c.userData.prevA = a;
+    const b = !!(gp.buttons[5] && gp.buttons[5].pressed);
+    if (b && !c.userData.prevB) { if (mode !== 'life') applyMode('life'); vrTpIdx = (vrTpIdx + 1) % TP.length; tpVR(vrTpIdx); }
+    c.userData.prevB = b;
     if (mode === 'life') {
       if (src.handedness === 'left') {
         if (Math.hypot(sx, sy) > 0.15) {
@@ -845,6 +898,7 @@ function handleInput(dt) {
     }
   }
   if (mode === 'life') { const head = camera.getWorldPosition(new V3()); const gy = groundAt(head.x, head.z); rig.position.y += (gy - rig.position.y) * Math.min(1, dt * 15); }
+  if (vrToast && (vrToastT -= dt) <= 0) { camera.remove(vrToast); vrToast = null; }
   if (moving) shadowDirty = true; else if (shadowDirty) { shadowDirty = false; updateSun(); }
 }
 
