@@ -2294,7 +2294,7 @@ function addDowned(id, p, name, ms) {
   const g = new THREE.Group(), y = Math.max(groundAt(p[0], p[2]), 0); g.position.set(p[0], y, p[2]);
   const ring = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.07, 6, 28), revMat); ring.rotation.x = Math.PI / 2; ring.position.y = 0.1; g.add(ring);
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 14, 10, 1, true), revMat); beam.position.y = 7; g.add(beam);
-  const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 2, 10), new THREE.MeshBasicMaterial({ visible: false })); hit.position.y = 1; g.add(hit);
+  const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 2, 10), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })); hit.position.y = 1; g.add(hit);
   hit.userData = { fn: () => startRevive(id), hint: `[E] / klik – reanimuj: ${name} (3 s, nie odchodź)` }; INTERACT.push(hit);
   const tag = labelSprite('RATUJ: ' + name, 2.4, 0.5); tag.position.y = 2.8; g.add(tag);
   world.add(g); DOWNED.set(id, { g, hit, ring, x: p[0], z: p[2], name, until: performance.now() + ms });
@@ -2435,6 +2435,7 @@ function compassUpdate() {
   compass.innerHTML = `<div style="font-size:26px;transform:rotate(${(ang * 180 / Math.PI).toFixed(0)}deg)">⬆</div>Statek · ${Math.round(Math.hypot(vx, vz))} m`;
 }
 
+window.LSJ_DEBUG.kill = () => { if (isAdmin() && playing()) die(); };
 window.LSJ_DEBUG.ev = k => { if (!isAdmin()) return; EV.next = 0; const d = k === 'hunt' ? { tg: NET.id || 'me', n: myName() } : k === 'drop' ? (() => { const me = mePos() || { x: 0, z: 0 }; return { p: [r2(me.x + 15), r2(me.z)], id: Math.random().toString(36).slice(2, 9) }; })() : {}; EV.next = Date.now() + 200000; startEvent(k, d, true); netSend(Object.assign({ t: 'ev', k }, d)); };
 function megaUpdate(dt, now) { chTypeUpdate(now); reviveUpdate(dt, now); eventsUpdate(dt, now); ambUpdate(dt, now); skyExtras(dt); compassUpdate(); }
 
