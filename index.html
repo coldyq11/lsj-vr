@@ -65,12 +65,12 @@
   <details>
     <summary>Sterowanie</summary>
     <p><b>Mapa:</b> lewy przycisk – obrót, prawy – przesuwanie, kółko – zoom, klik na liście – przelot.</p>
-    <p><b>Spacer:</b> kliknij w obraz (mysz się zablokuje, <kbd>Esc</kbd> zwalnia), <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> – ruch, <kbd>Shift</kbd> – bieg, <kbd>E</kbd> lub klik – użyj (automaty), <kbd>1</kbd>–<kbd>9</kbd> – teleport.</p>
+    <p><b>Spacer:</b> kliknij w obraz (mysz się zablokuje, <kbd>Esc</kbd> zwalnia), <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> – ruch, <kbd>Shift</kbd> – bieg, <kbd>Spacja</kbd> – skok, <kbd>H</kbd> – klakson (w aucie), <kbd>E</kbd> lub klik – użyj (automaty), <kbd>1</kbd>–<kbd>9</kbd> – teleport.</p>
     <p><b>VR (Quest 2):</b> <kbd>ENTER VR</kbd> na dole. Startujesz w skali 1:1 na przystani.<br>
     Lewa gałka – chodzenie, prawa – skręt o 30°<br>
     <kbd>B</kbd>/<kbd>Y</kbd> – szybka podróż do kolejnego miejsca<br>
     <kbd>spust</kbd> na przycisku/dźwigni automatu – gra; w innym miejscu przytrzymaj i puść = teleport<br>
-    <kbd>A</kbd>/<kbd>X</kbd> – tryb: 1:1 → makieta → olbrzym (w makiecie gałka obraca i skaluje)</p>
+    <kbd>A</kbd> – skok, <kbd>X</kbd> – tryb: 1:1 → makieta → olbrzym; spust w aucie – klakson; (w makiecie gałka obraca i skaluje)</p>
     <p><b>Auto:</b> podejdź i <kbd>E</kbd>/spust. <kbd>W</kbd><kbd>S</kbd> gaz, <kbd>A</kbd><kbd>D</kbd> skręt, <kbd>E</kbd> wysiądź. VR: lewa gałka, <kbd>B</kbd>/<kbd>Y</kbd> wysiądź.</p>
   </details>
   <p class="note">Rekonstrukcja poglądowa: teren generowany proceduralnie, budynki rozmieszczone w przybliżeniu wg publicznych opisów i zdjęć lotniczych. Wnętrza i kasyno są wymyślone. Postacie są fikcyjne. Automaty grają na wirtualne żetony.</p>
@@ -725,7 +725,7 @@ function toastVR(msg) {
 function tpWalk(i) {
   const t = TP[i]; if (!t) return; leaveCar(true);
   if (mode !== 'walk') setWalk();
-  PL.x = t.x; PL.z = t.z; PL.y = groundAt(t.x, t.z); yaw = t.yaw; pitch = 0;
+  PL.x = t.x; PL.z = t.z; PL.y = groundAt(t.x, t.z); yaw = t.yaw; pitch = 0; PL.vy = PL.hx = PL.hz = 0;
   toast('Teleport: ' + t.name);
 }
 let vrTpIdx = 0;
@@ -739,7 +739,7 @@ TP.forEach((t, i) => { const b = document.createElement('button'); b.textContent
 
 // ================= tryb spaceru (komputer) =================
 let mode = 'desk';
-const KEYS = {}, PL = { x: SPAWN.x, y: 0, z: SPAWN.z }; let yaw = SPAWN.yaw, pitch = 0, dragging = false;
+const KEYS = {}, PL = { x: SPAWN.x, y: 0, z: SPAWN.z, vy: 0, hx: 0, hz: 0, wet: false }; let yaw = SPAWN.yaw, pitch = 0, dragging = false;
 const centerRay = new THREE.Raycaster(); centerRay.far = 3;
 addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; KEYS[e.code] = true; if (e.code === 'KeyE' && mode === 'walk') { if (mySeat >= 0) leaveCar(); else interactCenter(); }
   const dg = /^Digit([1-9])$/.exec(e.code); if (dg && !renderer.xr.isPresenting) tpWalk(Number(dg[1]) - 1); });
@@ -764,7 +764,7 @@ function interactCenter() { const h = centerHit(); if (h) doAction(h.object.user
 function setWalk() {
   if (renderer.xr.isPresenting) return;
   mode = 'walk'; fly = null; controls.enabled = false; labels.visible = false;
-  PL.x = SPAWN.x; PL.z = SPAWN.z; PL.y = groundAt(PL.x, PL.z); yaw = SPAWN.yaw; pitch = 0;
+  PL.x = SPAWN.x; PL.z = SPAWN.z; PL.y = groundAt(PL.x, PL.z); yaw = SPAWN.yaw; pitch = 0; PL.vy = PL.hx = PL.hz = 0;
   $('cross').style.display = 'block';
 }
 function setDesk() {
@@ -779,12 +779,14 @@ function walkUpdate(dt) {
   let fx = 0, fz = 0;
   if (KEYS.KeyW || KEYS.ArrowUp) fz += 1; if (KEYS.KeyS || KEYS.ArrowDown) fz -= 1;
   if (KEYS.KeyD || KEYS.ArrowRight) fx += 1; if (KEYS.KeyA || KEYS.ArrowLeft) fx -= 1;
-  if (fx || fz) {
+  if (PL.hx || PL.hz) { PL.x += PL.hx * dt; PL.z += PL.hz * dt; }
+  else if (fx || fz) {
     const L = Math.hypot(fx, fz), sp = (KEYS.ShiftLeft || KEYS.ShiftRight ? 9 : 4) * boost() * dt; fx /= L; fz /= L;
     const nx = PL.x + (-Math.sin(yaw) * fz + Math.cos(yaw) * fx) * sp, nz = PL.z + (-Math.cos(yaw) * fz - Math.sin(yaw) * fx) * sp;
     const r = resolve(PL.x, PL.z, nx, nz); PL.x = r.x; PL.z = r.z;
   }
-  PL.y += (groundAt(PL.x, PL.z) - PL.y) * Math.min(1, dt * 15);
+  { const gy = groundAt(PL.x, PL.z); trampCheck(PL, PL.x, PL.z); physY(PL, gy, dt);
+    if (PL.wet) { PL.wet = false; PL.x = CANNON.x + 2; PL.z = CANNON.z + 2; PL.y = groundAt(PL.x, PL.z); say('Plusk! Wracasz pod armatę.'); } }
   camera.position.set(PL.x, PL.y + 1.65, PL.z); camera.rotation.set(pitch, yaw, 0, 'YXZ');
   const h = centerHit(), hint = $('hint');
   if (h) { hint.textContent = h.object.userData.hint || (h.object.userData.a === 'spin' ? '[E] / klik – zakręć' : '[E] / klik – zmień stawkę'); hint.style.display = 'block'; } else hint.style.display = 'none';
@@ -841,7 +843,7 @@ for (let i = 0; i < 2; i++) {
   c.userData = { src: null, prevA: false, turned: false, aim: false, hit: null };
   c.addEventListener('connected', e => { c.userData.src = e.data; });
   c.addEventListener('disconnected', () => { c.userData.src = null; });
-  c.addEventListener('selectstart', () => { if (tryInteract(c)) return; if (mode === 'life') c.userData.aim = true; });
+  c.addEventListener('selectstart', () => { if (mySeat >= 0) { horn(); return; } if (tryInteract(c)) return; if (mode === 'life') c.userData.aim = true; });
   c.addEventListener('selectend', () => { if (c.userData.aim && c.userData.hit) teleport(c.userData.hit); c.userData.aim = false; c.userData.hit = null; marker.visible = false; c.userData.line.scale.z = 3; });
   const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new V3(), new V3(0, 0, -1)]), new THREE.LineBasicMaterial({ color: 0x9fe8ff }));
   line.scale.z = 3; c.add(line); c.userData.line = line;
@@ -849,6 +851,7 @@ for (let i = 0; i < 2; i++) {
   rig.add(c); ctrls.push(c);
 }
 function teleport(p) {
+  VRP.vy = 0; VRP.hx = VRP.hz = 0;
   const off = camera.getWorldPosition(tmpV).sub(rig.position); off.y = 0;
   rig.position.set(p.x - off.x, p.y, p.z - off.z);
 }
@@ -874,7 +877,7 @@ function handleInput(dt) {
     const src = c.userData.src, gp = src && src.gamepad; if (!gp) continue;
     const sx = gp.axes[2] || 0, sy = gp.axes[3] || 0;
     const a = !!(gp.buttons[4] && gp.buttons[4].pressed);
-    if (a && !c.userData.prevA) { const order = ['life', 'table', 'giant']; applyMode(order[(order.indexOf(mode) + 1) % 3]); }
+    if (a && !c.userData.prevA) { if (mode === 'life' && src.handedness === 'right' && mySeat < 0) jumpVR(); else { const order = ['life', 'table', 'giant']; applyMode(order[(order.indexOf(mode) + 1) % 3]); } }
     c.userData.prevA = a;
     const b = !!(gp.buttons[5] && gp.buttons[5].pressed);
     if (b && !c.userData.prevB && mySeat >= 0) leaveCar(); else if (b && !c.userData.prevB) { if (mode !== 'life') applyMode('life'); vrTpIdx = (vrTpIdx + 1) % TP.length; tpVR(vrTpIdx); }
@@ -899,7 +902,12 @@ function handleInput(dt) {
       }
     }
   }
-  if (mode === 'life' && mySeat < 0) { const head = camera.getWorldPosition(new V3()); const gy = groundAt(head.x, head.z); rig.position.y += (gy - rig.position.y) * Math.min(1, dt * 15); }
+  if (mode === 'life' && mySeat < 0) {
+    if (VRP.hx || VRP.hz) { rig.position.x += VRP.hx * dt; rig.position.z += VRP.hz * dt; }
+    const head = camera.getWorldPosition(new V3()); const gy = groundAt(head.x, head.z);
+    VRP.y = rig.position.y; trampCheck(VRP, head.x, head.z); physY(VRP, gy, dt); rig.position.y = VRP.y;
+    if (VRP.wet) { VRP.wet = false; teleport({ x: CANNON.x + 2, y: groundAt(CANNON.x + 2, CANNON.z + 2), z: CANNON.z + 2 }); say('Plusk! Wracasz pod armatę.'); }
+  }
   if (vrToast && (vrToastT -= dt) <= 0) { camera.remove(vrToast); vrToast = null; }
   if (moving) shadowDirty = true; else if (shadowDirty) { shadowDirty = false; updateSun(); }
 }
@@ -981,7 +989,7 @@ function applyNet(d) {
     if (M && Array.isArray(d.s) && d.s.length === 3 && d.s.every(v => Number.isInteger(v) && v >= 0 && v < NSTOP)) {
       const a = avatars.get(d.id); spin(M, { s: d.s, n: a ? a.name : 'Gracz' });
     }
-  } else if (d.t === 'ch' || d.t === 'car' || d.t === 'die') { extraNet(d);
+  } else if (d.t === 'ch' || d.t === 'car' || d.t === 'die' || d.t === 'stun' || d.t === 'horn') { extraNet(d);
   } else if (d.t === 'leave' && typeof d.id === 'string') removeAvatar(d.id);
 }
 
@@ -1166,6 +1174,7 @@ function carUpdate(dt) {
     let hit = false;
     for (const c of COLL) if (Math.abs(p.x - c.x) < c.hw + c.hd + 2 && Math.abs(p.z - c.z) < c.hw + c.hd + 2) hit = pushRect(p, c, 1.1) || hit;
     if (groundAt(p.x, p.z) < WATER_LIMIT) CAR.speed = 0; else { CAR.x = p.x; CAR.z = p.z; if (hit) CAR.speed *= 0.85; }
+    if (Math.abs(CAR.speed) > 5 && Math.hypot(CAR.x - CH.x, CAR.z - CH.z) < 2.3 && performance.now() > (CH.stunUntil || 0)) { CH.stunUntil = performance.now() + 8000; netSend({ t: 'stun' }); earn(25); say('Potrąciłeś go! +25. Ogłuszony na 8 sekund.'); beep(150, 0.3, 0.08); }
     CAR.mine = true;
   } else if (!CAR.mine) {
     const k = 1 - Math.exp(-dt * 10);
@@ -1216,7 +1225,7 @@ function die() {
   leaveCar(true); carrying = false; invulnUntil = performance.now() + 6000;
   const y = groundAt(SPAWN.x, SPAWN.z);
   if (renderer.xr.isPresenting) { rig.rotation.y = SPAWN.yaw; teleport({ x: SPAWN.x, y, z: SPAWN.z }); }
-  else { PL.x = SPAWN.x; PL.z = SPAWN.z; PL.y = y; yaw = SPAWN.yaw; pitch = 0; }
+  else { PL.x = SPAWN.x; PL.z = SPAWN.z; PL.y = y; yaw = SPAWN.yaw; pitch = 0; PL.vy = PL.hx = PL.hz = 0; }
   flash.style.transition = 'none'; flash.style.opacity = '0.75'; setTimeout(() => { flash.style.transition = 'opacity .8s'; flash.style.opacity = '0'; }, 60);
   [180, 140, 100, 70].forEach((f, i) => setTimeout(() => beep(f, 0.2, 0.08), i * 130));
   say('Dopadł cię. Odradzasz się na przystani.');
@@ -1229,23 +1238,26 @@ function chaserUpdate(dt, now) {
     const consider = (x, z) => { const d = Math.hypot(x - CH.x, z - CH.z); if (d < bd) { bd = d; best = { x, z }; } };
     if (me && now > invulnUntil) consider(me.x, me.z);
     for (const a of avatars.values()) if (a.vis && now - a.last < 5000) consider(a.g.position.x, a.g.position.z);
-    if (best && bd > 0.3) { const k = Math.min(1, 2.4 * dt / bd); CH.x += (best.x - CH.x) * k; CH.z += (best.z - CH.z) * k; }
+    if (best && bd > 0.3 && now > (CH.stunUntil || 0)) { const k = Math.min(1, 2.4 * dt / bd); CH.x += (best.x - CH.x) * k; CH.z += (best.z - CH.z) * k; }
     CH.acc += dt; if (NET.id && CH.acc > 0.2) { CH.acc = 0; netSend({ t: 'ch', p: [r2(CH.x), r2(CH.z)] }); }
   } else {
     if (Math.hypot(CH.tx - CH.x, CH.tz - CH.z) > 30) { CH.x = CH.tx; CH.z = CH.tz; }
     else { const k = 1 - Math.exp(-dt * 6); CH.x += (CH.tx - CH.x) * k; CH.z += (CH.tz - CH.z) * k; }
   }
   chSprite.position.set(CH.x, Math.max(groundAt(CH.x, CH.z), 0) + 1.25, CH.z);
+  chMat.rotation = now < (CH.stunUntil || 0) ? Math.sin(now / 60) * 0.4 : 0;
   if (!me) return;
   const d = Math.hypot(me.x - CH.x, me.z - CH.z);
   if (d < 35) { CH.beepT -= dt; if (CH.beepT <= 0) { beep(60 + (35 - d) * 2, 0.18, 0.02 + 0.08 * (1 - d / 35)); CH.beepT = 0.2 + d / 35; } }
-  if (d < 1.3 && now > invulnUntil) {
+  if (d < 1.3 && now > invulnUntil && now > (CH.stunUntil || 0)) {
     if (shields > 0) { shields--; store.set('lsj-shield', String(shields)); invulnUntil = now + 4000; say('Amulet cię ocalił. Zostało: ' + shields); }
     else die();
     if (isAuth()) relocateChaser(); else netSend({ t: 'die' });
   }
 }
 function extraNet(d) {
+  if (d.t === 'stun') { CH.stunUntil = performance.now() + 8000; return; }
+  if (d.t === 'horn') { if (Array.isArray(d.p) && d.p.length === 2 && d.p.every(Number.isFinite)) { const me = world.worldToLocal(camera.getWorldPosition(new V3())); if (Math.hypot(me.x - d.p[0], me.z - d.p[1]) < 80) { beep(392, 0.35, 0.05); beep(494, 0.35, 0.04); } } return; }
   if (d.t === 'ch') { if (Array.isArray(d.p) && d.p.length === 2 && d.p.every(Number.isFinite)) { CH.tx = d.p[0]; CH.tz = d.p[1]; } }
   else if (d.t === 'die') { if (isAuth()) relocateChaser(); }
   else if (d.t === 'car') {
@@ -1254,9 +1266,88 @@ function extraNet(d) {
   }
 }
 function gameUpdate(dt) {
-  carUpdate(dt); chaserUpdate(dt, performance.now());
+  carUpdate(dt); chaserUpdate(dt, performance.now()); coinsUpdate(dt, performance.now());
   kioskT += dt; if (kioskT > 1) { kioskT = 0; KIOSKS.forEach(k => k.draw()); }
 }
+
+// ================= skakanie, trampoliny, armata, monety, klakson =================
+const JUMP_V = 5.4, GRAV = 15;
+const VRP = { y: 0, vy: 0, hx: 0, hz: 0, wet: false };
+function physY(o, gy, dt) {
+  if (o.vy !== 0 || o.y > gy + 0.35) {
+    o.vy -= GRAV * dt; o.y += o.vy * dt;
+    if (o.y <= gy) { o.y = gy; o.vy = 0; if (o.hx || o.hz) { o.hx = o.hz = 0; if (gy < WATER_LIMIT) o.wet = true; } }
+  } else o.y += (gy - o.y) * Math.min(1, dt * 15);
+}
+const grounded = (o, gy) => o.vy === 0 && o.y - gy < 0.4;
+function jumpWalk() { if (grounded(PL, groundAt(PL.x, PL.z))) PL.vy = JUMP_V * (boost() > 1 ? 1.2 : 1); }
+function jumpVR() { const h = camera.getWorldPosition(new V3()); if (grounded(VRP, groundAt(h.x, h.z))) VRP.vy = JUMP_V * (boost() > 1 ? 1.2 : 1); }
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space' && mode === 'walk') { e.preventDefault(); if (mySeat < 0) jumpWalk(); }
+  if (e.code === 'KeyH' && mySeat >= 0) horn();
+});
+
+// trampoliny (nad każdą wisi moneta)
+const TRAMPS = [safeSpot(S.tennis.x - 26, S.tennis.z + 4), safeSpot(S.pool.x + 6, S.pool.z + 16), safeSpot(shoreX + 26, dockZ + 12)];
+for (const t of TRAMPS) {
+  t.y = groundAt(t.x, t.z);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 0.5, 20), lam(0x1e63d6)); base.position.set(t.x, t.y + 0.25, t.z); world.add(base);
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(1.45, 1.45, 0.52, 20), lam(0x111111)); top.position.copy(base.position); world.add(top);
+}
+function trampCheck(o, x, z) {
+  if (o.vy > 0) return;
+  for (const t of TRAMPS) if (Math.hypot(x - t.x, z - t.z) < 1.5 && o.y - t.y < 0.6) { o.vy = 15; beep(700, 0.08); setTimeout(() => beep(1000, 0.1), 60); return; }
+}
+
+// armata: wystrzeliwuje gracza na kort tenisowy
+const CANNON = safeSpot(shoreX + 14, dockZ - 16);
+{
+  const y = groundAt(CANNON.x, CANNON.z), dx = S.tennis.x - CANNON.x, dz = S.tennis.z - CANNON.z;
+  const g = new THREE.Group(); g.position.set(CANNON.x, y, CANNON.z); g.rotation.y = Math.atan2(-dx, -dz); world.add(g);
+  const ud = { fn: fireCannon, hint: '[E] / klik – wystrzel się z armaty' };
+  const base = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.6, 2.0), lam(0x5a3d2b)); base.position.y = 0.6; base.userData = ud; g.add(base);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 2.6, 14), lam(0x2b2b2b)); barrel.position.set(0, 1.5, -0.5); barrel.rotation.x = -Math.PI / 4; barrel.userData = ud; g.add(barrel);
+  for (const wx of [-0.8, 0.8]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.2, 14), lam(0x3a2a1e)); w.rotation.z = Math.PI / 2; w.position.set(wx, 0.55, 0); g.add(w); }
+  INTERACT.push(base, barrel); COLL.push({ x: CANNON.x, z: CANNON.z, hw: 0.8, hd: 1.1, rot: g.rotation.y });
+  const tag = labelSprite('ARMATA', 1.6, 0.35); tag.position.set(CANNON.x, y + 3, CANNON.z); world.add(tag);
+}
+function fireCannon() {
+  if (!playing() || mySeat >= 0) return;
+  const xr = renderer.xr.isPresenting, o = xr ? VRP : PL;
+  const h = xr ? camera.getWorldPosition(new V3()) : new V3(PL.x, 0, PL.z);
+  const y0 = xr ? rig.position.y : PL.y, tx = S.tennis.x + (Math.random() - 0.5) * 10, tz = S.tennis.z + (Math.random() - 0.5) * 6;
+  const vy = 40, disc = vy * vy - 2 * GRAV * (groundAt(tx, tz) - y0); if (disc < 0) return;
+  const t = (vy + Math.sqrt(disc)) / GRAV;
+  if (!xr) PL.y = y0 + 0.5; else VRP.y = rig.position.y = y0 + 0.5;
+  o.vy = vy; o.hx = (tx - h.x) / t; o.hz = (tz - h.z) / t;
+  [90, 70, 55].forEach((f, i) => setTimeout(() => beep(f, 0.25, 0.1), i * 60));
+  say('BUM!');
+}
+
+// monety do zbierania (+10, odnawiają się po 3 min)
+const COINS = [];
+{
+  const cg = new THREE.CylinderGeometry(0.35, 0.35, 0.08, 16); cg.rotateX(Math.PI / 2);
+  const cm = new THREE.MeshPhongMaterial({ color: 0xffd54a, shininess: 90, specular: 0xffffff, emissive: 0x4a3500 });
+  const addCoin = (x, y, z) => { const m = new THREE.Mesh(cg, cm); m.position.set(x, y, z); world.add(m); COINS.push({ m, x, y, z, back: 0 }); };
+  const r = rng(77); let n = 0;
+  for (let t = 0; t < 4000 && n < 40; t++) { const x = -420 + r() * 800, z = -260 + r() * 520, h = hLSJ(x, z); if (h < 1.5 || blocked(x, z)) continue; addCoin(x, h + 1.0, z); n++; }
+  for (const t of TRAMPS) addCoin(t.x, t.y + 7, t.z);
+}
+function coinsUpdate(dt, now) {
+  const me = playing() ? world.worldToLocal(camera.getWorldPosition(new V3())) : null;
+  for (const c of COINS) {
+    if (!c.m.visible) { if (now > c.back) c.m.visible = true; else continue; }
+    c.m.rotation.y += dt * 2.5;
+    if (me && Math.hypot(me.x - c.x, me.z - c.z) < 1.3 && c.y > me.y - 1.95 && c.y < me.y + 0.3) {
+      c.m.visible = false; c.back = now + 180000; earn(10); beep(988, 0.06); setTimeout(() => beep(1319, 0.08), 70);
+    }
+  }
+}
+
+// klakson
+function horn() { if (mySeat < 0) return; beep(392, 0.35, 0.07); beep(494, 0.35, 0.05); netSend({ t: 'horn', p: [r2(CAR.x), r2(CAR.z)] }); }
 
 // ================= pętla =================
 updateSun();
