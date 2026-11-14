@@ -83,6 +83,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // ================= narzędzia =================
 function hash(x, y) { const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return h - Math.floor(h); }
@@ -98,7 +99,13 @@ function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let
 const rand = rng(1998);
 const V3 = THREE.Vector3;
 const GAME_MODE = (() => { try { return localStorage.getItem('lsj-mode') === 'free' ? 'free' : 'story'; } catch (e) { return 'story'; } })(), STORY = GAME_MODE === 'story';
-const memStore = new Map(), KEEP = new Set(['lsj-nick', 'lsj-mode']);
+const DIFFS = {
+  easy: { label: 'Łatwy', lives: 5, sp: 0.85, sight: 0.8, wait: 15, loss: 0.2, start: 120, desc: 'Łatwy: 5 żyć, wolniejsi goniący, odrodzenie 15 s.' },
+  normal: { label: 'Normalny', lives: 3, sp: 1, sight: 1, wait: 30, loss: 0.3, start: 60, desc: 'Normalny: 3 życia, odrodzenie 30 s, tracisz 30% monet.' },
+  nightmare: { label: 'Koszmar', lives: 1, sp: 1.15, sight: 1.3, wait: 45, loss: 0.5, start: 30, desc: 'Koszmar: 1 życie, szybsi i bystrzejsi goniący. Tylko reanimacja cię uratuje.' }
+};
+const DIFF_KEY = (() => { try { const k = localStorage.getItem('lsj-diff'); return STORY && DIFFS[k] ? k : 'normal'; } catch (e) { return 'normal'; } })(), DIFF = DIFFS[DIFF_KEY];
+const memStore = new Map(), KEEP = new Set(['lsj-nick', 'lsj-mode', 'lsj-diff', 'lsj-board']);
 const store = {
   get(k) { if (STORY && !KEEP.has(k)) return memStore.has(k) ? memStore.get(k) : null; try { return localStorage.getItem(k); } catch (e) { return null; } },
   set(k, v) { if (STORY && !KEEP.has(k)) { memStore.set(k, v); return; } try { localStorage.setItem(k, v); } catch (e) { } }
@@ -203,6 +210,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.25;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.shadowMap.autoUpdate = false;
 renderer.xr.enabled = true;
@@ -336,9 +344,19 @@ const lam = c => matCache[c] || (matCache[c] = new THREE.MeshLambertMaterial({ c
 const basic = c => new THREE.MeshBasicMaterial({ color: c });
 function canvasTex(w, h, draw) { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; }
 function add(mesh) { mesh.castShadow = mesh.receiveShadow = true; world.add(mesh); teleportables.push(mesh); return mesh; }
+const WIN_MATS = [];
+const winTex = canvasTex(256, 256, (g) => {
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, 256, 256); g.fillStyle = '#d9d2c4'; g.fillRect(0, 226, 256, 30); g.fillRect(0, 0, 256, 14);
+  for (const x of [40, 152]) { g.fillStyle = '#f4f1ea'; g.fillRect(x - 8, 66, 80, 128); g.fillStyle = '#2a3a4c'; g.fillRect(x, 74, 64, 112); g.fillStyle = '#f4f1ea'; g.fillRect(x + 30, 74, 4, 112); g.fillRect(x, 126, 64, 4); g.fillStyle = '#7b8f6a'; g.fillRect(x - 20, 70, 10, 120); g.fillRect(x + 74, 70, 10, 120); }
+});
+const winGlow = canvasTex(256, 256, (g) => { g.fillStyle = '#000'; g.fillRect(0, 0, 256, 256); g.fillStyle = '#ffcf7a'; for (const x of [40, 152]) { g.fillRect(x, 74, 30, 52); g.fillRect(x + 34, 74, 30, 52); g.fillRect(x, 130, 30, 56); g.fillRect(x + 34, 130, 30, 56); } });
+function winMat(len, h, color) {
+  const t = winTex.clone(), e = winGlow.clone(); for (const x of [t, e]) { x.wrapS = x.wrapT = THREE.RepeatWrapping; x.repeat.set(Math.max(1, Math.round(len / 5)), (h + 3) / h); x.offset.set(0, -3 / h); x.needsUpdate = true; }
+  const m = new THREE.MeshLambertMaterial({ color, map: t, emissive: 0xffffff, emissiveMap: e, emissiveIntensity: 0 }); WIN_MATS.push(m); return m;
+}
 function building(x, z, w, d, h, ry, wall = 0xf1ebdd, roof = 0x2f6f73) {
-  const g = hLSJ(x, z);
-  const b = add(new THREE.Mesh(new THREE.BoxGeometry(w, h + 3, d), lam(wall)));
+  const g = hLSJ(x, z), mw = winMat(w, h, wall), md = winMat(d, h, wall), plain = lam(wall);
+  const b = add(new THREE.Mesh(new THREE.BoxGeometry(w, h + 3, d), [md, md, plain, plain, mw, mw]));
   b.position.set(x, g + (h + 3) / 2 - 3, z); b.rotation.y = ry;
   const rg = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1); rg.rotateY(Math.PI / 4);
   const r = add(new THREE.Mesh(rg, lam(roof)));
@@ -360,7 +378,7 @@ function hollow(o) {
   world.add(floor); teleportables.push(floor);
   FLOORS.push({ x0: o.x - hw, x1: o.x + hw, z0: o.z - hd, z1: o.z + hd, y: fy, top: fy + H });
   const wm = o.wallMat || lam(o.wall);
-  const seg = (cx, cz, w, d) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, H + 3, d), wm); m.position.set(cx, fy + H / 2 - 1.5, cz); m.castShadow = true; world.add(m); COLL.push({ x: cx, z: cz, hw: w / 2, hd: d / 2, rot: 0 }); };
+  const seg = (cx, cz, w, d) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, H + 3, d), o.wallMat || winMat(Math.max(w, d), H, o.wall)); m.position.set(cx, fy + H / 2 - 1.5, cz); m.castShadow = true; world.add(m); COLL.push({ x: cx, z: cz, hw: w / 2, hd: d / 2, rot: 0 }); };
   const dz = o.door === 'n' ? -1 : 1, fz = o.z + dz * (hd - t / 2), sw = (o.w - o.doorW) / 2;
   seg(o.x, o.z - dz * (hd - t / 2), o.w, t);
   seg(o.x - hw + sw / 2, fz, sw, t); seg(o.x + hw - sw / 2, fz, sw, t);
@@ -475,7 +493,7 @@ function payout(a, b, c) { if (a === b && b === c) return PAY3[a]; if (a === 'C'
 let RTP = 0; for (const a of STRIP) for (const b of STRIP) for (const c of STRIP) RTP += payout(a, b, c); RTP /= NSTOP ** 3;
 const BETS = [1, 5, 10, 25];
 const randStop = () => crypto.getRandomValues(new Uint32Array(1))[0] % NSTOP; // 2^32 dzieli się przez 16 – brak obciążenia
-const savedCr = store.get('lsj-credits'); let credits = savedCr === null ? (STORY ? 60 : 200) : Number(savedCr); if (!Number.isFinite(credits) || credits < 0) credits = 200;
+const savedCr = store.get('lsj-credits'); let credits = savedCr === null ? (STORY ? DIFF.start : 200) : Number(savedCr); if (!Number.isFinite(credits) || credits < 0) credits = 200;
 const saveCredits = () => store.set('lsj-credits', String(credits));
 
 function drawSym(g, s, cx, cy, sz) {
@@ -639,9 +657,15 @@ function free(x, z, m) {
 const slopeAt = (x, z) => Math.hypot(hLSJ(x + 2, z) - hLSJ(x - 2, z), hLSJ(x, z + 2) - hLSJ(x, z - 2)) / 4;
 {
   const M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), P = new V3(), SC = new V3(), COL = new THREE.Color();
-  const trunkG = new THREE.CylinderGeometry(0.22, 0.35, 8, 5); trunkG.translate(0, 4, 0);
-  const crownG = new THREE.IcosahedronGeometry(1, 0); crownG.scale(3, 1.1, 3); crownG.translate(0, 8.3, 0);
-  const N = 450, trunks = new THREE.InstancedMesh(trunkG, lam(0x8a7458), N), crowns = new THREE.InstancedMesh(crownG, new THREE.MeshLambertMaterial({ color: 0xffffff }), N);
+  const trunkG = new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new V3(0, -0.3, 0), new V3(0.25, 3, 0), new V3(0.8, 6, 0), new V3(1.5, 8.6, 0)]), 10, 0.24, 6, false);
+  const fr = [];
+  for (let k = 0; k < 9; k++) {
+    const L = 3.6 + (k % 3) * 0.5, f = new THREE.PlaneGeometry(L, 0.9, 7, 1); f.translate(L / 2, 0, 0); f.rotateX(-Math.PI / 2);
+    const p = f.attributes.position; for (let v = 0; v < p.count; v++) { const t = p.getX(v) / L; p.setY(v, 0.9 * t - 2.1 * t * t); p.setZ(v, p.getZ(v) * (1 - 0.75 * t) + Math.sin(t * 9) * 0.04); }
+    f.rotateZ(0.15 * (k % 2)); f.rotateY(k / 9 * Math.PI * 2 + (k % 3) * 0.2); f.translate(1.5, 8.6, 0); fr.push(f);
+  }
+  const crownG = mergeGeometries(fr); crownG.computeVertexNormals();
+  const N = 450, trunks = new THREE.InstancedMesh(trunkG, lam(0x8a7458), N), crowns = new THREE.InstancedMesh(crownG, new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide }), N);
   let n = 0;
   for (let t = 0; t < 8000 && n < N; t++) {
     const x = -450 + rand() * 850, z = -280 + rand() * 560, h = hLSJ(x, z);
@@ -958,7 +982,7 @@ function joinCode(code) {
   if (!window.mqtt) { netStatus('Nie wczytano biblioteki MQTT – sprawdź internet i odśwież stronę.'); return; }
   netReset();
   const myId = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
-  const topic = 'lsjvr2026/room/' + code + '/' + GAME_MODE;
+  const topic = 'lsjvr2026/room/' + code + '/' + GAME_MODE + (STORY ? '-' + DIFF_KEY : '');
   NET.code = code; NET.id = myId; NET.topic = topic; placeParts(hashStr(code));
   netStatus(`Pokój: ${code} · łączę z serwerem…`);
   BROKERS.forEach((url, i) => {
@@ -1327,28 +1351,30 @@ function carHitChasers(v) {
 function die() {
   const now = performance.now(), pos = world.worldToLocal(camera.getWorldPosition(new V3())), fy = feetY();
   leaveCar(true); carrying = false; carryPart = -1; hiding = null; race = null; fishing = null;
-  const lost = Math.floor(credits * (STORY ? 0.3 : 0.15)); credits -= lost; saveCredits(); drawAll();
+  const lost = Math.floor(credits * (STORY ? DIFF.loss : 0.15)); credits -= lost; saveCredits(); drawAll();
   if (STORY) lives--;
   myRag = spawnRag(pos.x, fy + 0.7, pos.z, colorFor(NET.id || 'me')); netSend({ t: 'rag', p: [r2(pos.x), r2(fy + 0.7), r2(pos.z)] });
   deathAt = now; deadPos.set(pos.x, fy, pos.z);
-  if (STORY && lives <= 0) { eliminated = true; deadUntil = Infinity; } else deadUntil = now + (STORY ? 30000 : 10000);
+  if (STORY && lives <= 0) { eliminated = true; deadUntil = Infinity; } else deadUntil = now + (STORY ? DIFF.wait : 10) * 1000;
+  if (NET.id && avatars.size) netSend({ t: 'down', p: [r2(pos.x), r2(fy), r2(pos.z)], n: myName(), u: eliminated ? 120 : (STORY ? DIFF.wait : 10) });
+  jumpscare();
   if (renderer.xr.isPresenting) { rig.position.set(deadPos.x, deadPos.y + 60, deadPos.z + 40); VRP.vy = VRP.hx = VRP.hz = 0; }
   else { PL.vy = PL.hx = PL.hz = 0; if (eliminated && document.pointerLockElement) document.exitPointerLock(); }
   flash.style.transition = 'none'; flash.style.opacity = '0.8'; setTimeout(() => { flash.style.transition = 'opacity .8s'; flash.style.opacity = '0'; }, 60);
   scream();
-  say(eliminated ? 'Nie masz już żyć. Koniec gry.' : `Złapany. Tracisz ${lost} monet. Odrodzenie za ${STORY ? 30 : 10} s.` + (STORY ? ` Życia: ${lives}.` : ''));
+  say(eliminated ? 'Nie masz już żyć. Koniec gry.' : `Złapany. Tracisz ${lost} monet. Odrodzenie za ${STORY ? DIFF.wait : 10} s.` + (STORY ? ` Życia: ${lives}.` : ''));
   KIOSKS.forEach(k => k.draw());
 }
 function chaserUpdate(dt, now) {
   const night = isNight(), banished = now < banishUntil, me = mePos(), auth = isAuth(), fy = feetY();
-  if (night && !wasNight) { if (auth) for (let i = 1; i < NCH; i++) relocateChaser(i); if (me) say(bloodMoon() ? 'Krwawy księżyc. Jest ich czterech i są szybsi niż kiedykolwiek.' : 'Zapada noc. Przyszło trzech kolejnych.'); }
+  if (night && !wasNight) { if (auth) for (let i = 1; i < NCH; i++) relocateChaser(i); if (me) say(bloodMoon() ? 'Krwawy księżyc. Jest ich czterech i są szybsi niż kiedykolwiek.' : 'Zapada noc. Przyszli: Ślepiec (słyszy hałas), Statua (nie spuszczaj jej z oczu) i Upiór (pojawia się znikąd).'); }
   if (!night && wasNight && me) say('Świta. Nocni goście znikają.');
   wasNight = night;
-  const speed = night ? (bloodMoon() ? 6.4 : 5.4) : 4.5;
-  const targets = [], sight = night ? (bloodMoon() ? 70 : 28) : 35;
+  const speed = (night ? (bloodMoon() ? 6.4 : 5.4) : 4.5) * DIFF.sp;
+  const targets = [], sight = (night ? (bloodMoon() ? 70 : 28) : 35) * DIFF.sight * (storming() ? 0.6 : 1);
   if (auth) {
-    if (me && now > invulnUntil && !hiding) targets.push({ x: me.x, z: me.z, r: Math.max(sight, myNoise) });
-    for (const a of avatars.values()) if (a.vis && !a.hid && now - a.last < 5000) targets.push({ x: a.g.position.x, z: a.g.position.z, r: Math.max(sight, a.noise || 0) });
+    if (me && now > invulnUntil && !hiding) targets.push({ x: me.x, z: me.z, r: huntR(NET.id || 'me', Math.max(sight, myNoise)), n: huntR(NET.id || 'me', myNoise), pl: 1 });
+    for (const [aid, a] of avatars) if (a.vis && !a.hid && now - a.last < 5000) targets.push({ x: a.g.position.x, z: a.g.position.z, r: huntR(aid, Math.max(sight, a.noise || 0)), n: huntR(aid, a.noise || 0), pl: 1 });
   }
   let nearest = Infinity;
   for (let i = 0; i < NCH; i++) {
@@ -1356,10 +1382,12 @@ function chaserUpdate(dt, now) {
     if (auth) {
       if (now > c.stunUntil) {
         let best = null, bd = Infinity;
-        for (const t of targets) { const d = Math.hypot(t.x - c.x, t.z - c.z); if (d < bd && d < t.r) { bd = d; best = t; } }
+        for (const t of targets) { const d = Math.hypot(t.x - c.x, t.z - c.z); if (d < bd && d < (i === 1 ? t.n * 1.3 : t.r)) { bd = d; best = t; } }
+        if (i === 3 && best && best.pl && bd > 22 && now > c.blink) { for (let tt = 0; tt < 20; tt++) { const a = Math.random() * 6.28, nx = best.x + Math.cos(a) * 13, nz = best.z + Math.sin(a) * 13; if (hLSJ(nx, nz) > 1.5) { c.x = c.tx = nx; c.z = c.tz = nz; break; } } c.blink = now + 22000; }
         if (best) c.inv = { x: best.x, z: best.z, until: now + 7000 }; else if (c.inv && now < c.inv.until && Math.hypot(c.inv.x - c.x, c.inv.z - c.z) > 1.5) best = c.inv;
         const fl = nearFlare(c); if (fl) best = fl; if (!best) best = patrol(c);
-        if (best) { const gx = best.x + Math.cos(i * 1.57) * 0.8 * (i ? 1 : 0), gz = best.z + Math.sin(i * 1.57) * 0.8 * (i ? 1 : 0), gd = Math.hypot(gx - c.x, gz - c.z); if (gd > 0.3) { const k = Math.min(1, (best.slow ? speed * 0.4 : speed) * dt / gd); c.x += (gx - c.x) * k; c.z += (gz - c.z) * k; } }
+        const frozen = i === 2 && seenByAny(c);
+        if (best && !frozen) { const gx = best.x + Math.cos(i * 1.57) * 0.8 * (i ? 1 : 0), gz = best.z + Math.sin(i * 1.57) * 0.8 * (i ? 1 : 0), gd = Math.hypot(gx - c.x, gz - c.z); if (gd > 0.3) { const k = Math.min(1, (best.slow ? speed * 0.4 : speed * CH_TYPES[i].sp) * dt / gd); c.x += (gx - c.x) * k; c.z += (gz - c.z) * k; } }
         for (const [bid, b] of BANS) if (Math.hypot(b.x - c.x, b.z - c.z) < 0.9) { removeBanana(bid, true); stunChaser(i, true); break; }
       }
     } else if (Math.hypot(c.tx - c.x, c.tz - c.z) > 30) { c.x = c.tx; c.z = c.tz; }
@@ -1397,6 +1425,11 @@ function extraNet(d) {
   else if (d.t === 'ban') { if (ok2(d.p) && typeof d.b === 'string' && d.b.length <= 16) addBanana(d.b, d.p[0], d.p[1]); }
   else if (d.t === 'banx') { if (typeof d.b === 'string') removeBanana(d.b, false); }
   else if (d.t === 'rtc') vcOnMsg(d);
+  else if (d.t === 'down') { if (okVec(d.p) && Number.isFinite(d.u)) { addDowned(d.id, d.p, String(d.n || 'Gracz').slice(0, 16), clampN(d.u, 5, 130) * 1000); if (playing()) say(`${String(d.n || 'Gracz').slice(0, 16)} został złapany! Biegnij go reanimować.`); } }
+  else if (d.t === 'up') removeDowned(d.id);
+  else if (d.t === 'rev') { if (d.to === NET.id) revived(d); removeDowned(d.to); }
+  else if (d.t === 'ev') { if (typeof d.k === 'string') startEvent(d.k, d, false); }
+  else if (d.t === 'dropx') { if (typeof d.id === 'string') openDrop(d.id, true); }
   else if (d.t === 'rb') { if (typeof d.k === 'string' && Number.isInteger(d.r)) rouOther(d.k, d.r); }
   else if (d.t === 'win') { if (STORY && Number.isFinite(d.s)) doWin(d.s, false); }
   else if (d.t === 'flare') { if (ok2(d.p)) addFlare(d.p[0], d.p[1]); }
@@ -1487,7 +1520,7 @@ function coinsUpdate(dt, now) {
 function horn() { if (mySeat < 0) return; noisePulse(150, 2500); beep(392, 0.35, 0.07); beep(494, 0.35, 0.05); { const v = VEH[myVeh]; netSend({ t: 'horn', p: [r2(v.x), r2(v.z)] }); } }
 
 // ================= content: dzień/noc, ragdoll, banany, jetpack, kurczaki, kryjówki, kasyno, wędka, questy, sejf, wyścig, golf, Great St. James =================
-const EXTRA_T = new Set(['ch', 'veh', 'die', 'stun', 'horn', 'altar', 'rag', 'ban', 'banx', 'race', 'win', 'flare', 'rtc', 'rb']);
+const EXTRA_T = new Set(['ch', 'veh', 'die', 'stun', 'horn', 'altar', 'rag', 'ban', 'banx', 'race', 'win', 'flare', 'rtc', 'rb', 'down', 'up', 'rev', 'ev', 'dropx']);
 function mePos() { return playing() ? world.worldToLocal(camera.getWorldPosition(new V3())) : null; }
 function feetY() { return renderer.xr.isPresenting ? rig.position.y : PL.y; }
 function lookDir() { const d = camera.getWorldDirection(new V3()); d.y = 0; if (d.lengthSq() < 1e-6) d.set(0, 0, -1); return d.normalize(); }
@@ -1897,7 +1930,7 @@ const gsjG = new THREE.Group(); world.add(gsjG);
 
 function extrasUpdate(dt, now) {
   const me = mePos();
-  skyUpdate(); ragsUpdate(dt); bananasUpdate(me, now); chickensUpdate(me, dt, now); fishingUpdate(me, now); raceUpdate(now); golfUpdate(dt); rouUpdate(dt); fxUpdate(dt, now); moreUpdate(dt, now);
+  skyUpdate(); ragsUpdate(dt); bananasUpdate(me, now); chickensUpdate(me, dt, now); fishingUpdate(me, now); raceUpdate(now); golfUpdate(dt); rouUpdate(dt); fxUpdate(dt, now); moreUpdate(dt, now); megaUpdate(dt, now);
   for (const it of ITEMS) { it.m.position.y = it.activeFn() ? it.y : -999; it.m.rotation.y += dt; }
   if (hiding && (!me || Math.hypot(me.x - hiding.x, me.z - hiding.z) > 1.9)) { hiding = null; if (me) say('Wyszedłeś z kryjówki.'); }
   hideOv.style.opacity = hiding && !renderer.xr.isPresenting ? '0.6' : '0';
@@ -1907,7 +1940,7 @@ window.LSJ_DEBUG = { time: v => { if (isAdmin()) timeOverride = v; }, blood: v =
 
 // ================= tryb fabularny, życia, kondycja, strach, flary, latarka, admin =================
 const isAdmin = () => myName() === 'Jeffrey Epstein';
-let lives = 3, stamina = 1, staminaLock = 0, sprintT = 0, scare = 0, deathAt = 0, hudT = 0, hbT = 0, flashOn = false;
+let lives = DIFF.lives, stamina = 1, staminaLock = 0, sprintT = 0, scare = 0, deathAt = 0, hudT = 0, hbT = 0, flashOn = false;
 const runStart = Date.now();
 function moveSpeed(sprint, dt, base, fast) {
   const now = performance.now(), energized = now < boostUntil; let sp = base;
@@ -2010,9 +2043,9 @@ let won = 0;
 const winOv = mk('position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#fff;font:800 34px system-ui,sans-serif;text-shadow:0 2px 6px #000;background:rgba(0,40,60,.55);text-align:center');
 const winTxt = mk('', winOv); { const b = againBtn.cloneNode(true); b.style.display = ''; b.onclick = () => location.reload(); winOv.appendChild(b); }
 function doWin(sec, send) {
-  if (won) return; won = sec; gameWon = true; leaveCar(true);
+  if (won) return; won = sec; gameWon = true; leaveCar(true); boardAdd(sec);
   const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
-  winTxt.textContent = `Uciekliście z wyspy! Czas: ${m}:${String(s).padStart(2, '0')}`; winOv.style.display = 'flex';
+  winTxt.textContent = `Uciekliście z wyspy! Czas: ${m}:${String(s).padStart(2, '0')}\n\nRanking (${DIFF.label}):\n${boardText(DIFF_KEY)}`; winTxt.style.whiteSpace = 'pre-line'; winTxt.style.fontSize = '22px'; winOv.style.display = 'flex';
   if (document.pointerLockElement) document.exitPointerLock();
   if (renderer.xr.isPresenting) say(`Uciekliście z wyspy! Czas: ${m}:${String(s).padStart(2, '0')}`);
   [523, 659, 784, 1046, 1318].forEach((f, i) => setTimeout(() => beep(f, 0.18), i * 130));
@@ -2036,7 +2069,7 @@ kiosk(shoreX - 68.2, dockZ + 6, Math.PI / 2, 'STATEK',
 function fxUpdate(dt, now) {
   if (now - sprintT > 800 && stamina < 1) stamina = Math.min(1, stamina + dt / 10);
   if (!playing()) scare = 0;
-  if (deadUntil && deadUntil !== Infinity && now >= deadUntil) { deadUntil = 0; toSpawn(); invulnUntil = now + 6000; for (let i = 0; i < NCH; i++) if (CHS[i].on && Math.hypot(CHS[i].x - SPAWN.x, CHS[i].z - SPAWN.z) < 80) { if (isAuth()) relocateChaser(i); else netSend({ t: 'die', i }); } say(STORY ? `Wracasz do gry. Życia: ${lives}` : 'Wracasz do gry.'); }
+  if (deadUntil && deadUntil !== Infinity && now >= deadUntil) { deadUntil = 0; toSpawn(); invulnUntil = now + 6000; netSend({ t: 'up' }); for (let i = 0; i < NCH; i++) if (CHS[i].on && Math.hypot(CHS[i].x - SPAWN.x, CHS[i].z - SPAWN.z) < 80) { if (isAuth()) relocateChaser(i); else netSend({ t: 'die', i }); } say(STORY ? `Wracasz do gry. Życia: ${lives}` : 'Wracasz do gry.'); }
   vig.style.opacity = renderer.xr.isPresenting ? '0' : String(Math.pow(scare, 1.4));
   if ((hudT -= dt) <= 0) {
     hudT = 0.2; const xr = renderer.xr.isPresenting, inGame = mode === 'walk' && !xr;
@@ -2046,7 +2079,7 @@ function fxUpdate(dt, now) {
       + (STORY ? ` &nbsp; Części ${bitCount(delivered)}/${NPARTS}` + (carryPart >= 0 ? ` · niesiesz: ${PART_NAMES[carryPart]}` : '') : '');
     const dead = deadUntil > 0 && !xr && !won;
     deathOv.style.display = dead ? 'flex' : 'none';
-    if (dead) { deathTxt.textContent = eliminated ? 'Nie masz już żyć. Koniec gry.' : `Złapany. Odrodzenie za ${Math.max(0, Math.ceil((deadUntil - now) / 1000))} s` + (STORY ? ` · życia: ${lives}` : ''); againBtn.style.display = eliminated ? '' : 'none'; }
+    if (dead) { deathTxt.textContent = (eliminated ? 'Nie masz już żyć. Koniec gry.' + (avatars.size ? ' Koledzy wciąż mogą cię reanimować.' : '') : `Złapany. Odrodzenie za ${Math.max(0, Math.ceil((deadUntil - now) / 1000))} s` + (STORY ? ` · życia: ${lives}` : '') + (avatars.size ? '\nKolega może cię reanimować' : '')); deathTxt.style.whiteSpace = 'pre-line'; againBtn.style.display = eliminated ? '' : 'none'; }
   }
   if (SFX) { try { const t = AC.currentTime, hi = scare > 0.5 ? (scare - 0.5) * 0.09 : 0; SFX.dg.gain.setTargetAtTime(playing() ? 0.012 + nightAmt() * 0.03 + 0.22 * scare * scare : 0, t, 0.25); SFX.lp.frequency.setTargetAtTime(130 + 1500 * scare, t, 0.25); SFX.sg.gain.setTargetAtTime(hi * (0.6 + 0.4 * Math.sin(now / 40)), t, 0.03); } catch (e) { } }
   if (scare > 0.08) { hbT -= dt; if (hbT <= 0) { thump(0.12 + 0.35 * scare); hbT = 1.1 - 0.82 * scare; } }
@@ -2176,7 +2209,7 @@ function moreUpdate(dt, now) {
     if (VC.level > 0.05) nz = Math.max(nz, Math.min(80, 25 + VC.level * 350));
     if (now < noisePulseUntil) nz = Math.max(nz, noisePulseR);
   }
-  myNoise = nz;
+  myNoise = storming() ? nz * 0.6 : nz;
   eyeH += ((crouching() ? 1.0 : 1.65) - eyeH) * Math.min(1, dt * 12);
   if ((moreT -= dt) > 0) return; moreT = 0.25;
   vcUpdate(now);
@@ -2186,6 +2219,222 @@ function moreUpdate(dt, now) {
     if (show) hud2.innerHTML = `Hałas <span style="display:inline-block;width:90px;height:7px;background:rgba(255,255,255,.25);border-radius:4px;vertical-align:middle"><span style="display:block;height:7px;border-radius:4px;width:${Math.round(clampN(myNoise / 90, 0.04, 1) * 90)}px;background:${myNoise > 50 ? '#e74c3c' : myNoise > 20 ? '#e67e22' : '#2ecc71'}"></span></span>` + (powerOn() ? '' : ' &nbsp; <span style="color:#ff6b6b">BRAK PRĄDU – zatankuj generator</span>');
   }
 }
+
+// ================= MEGA: typy goniących, reanimacja, zdarzenia, otoczenie, intro, kompas, ranking =================
+const CH_TYPES = [
+  { name: '', sp: 1, tint: 0xffffff },
+  { name: 'ŚLEPIEC', sp: 1.3, tint: 0xff7070 },
+  { name: 'STATUA', sp: 1.55, tint: 0xb4b4b4 },
+  { name: 'UPIÓR', sp: 0.8, tint: 0x9fb8ff }
+];
+const chTags = CH_TYPES.map((t, i) => { if (!i) return null; const s = labelSprite(t.name, 1.6, 0.36); s.visible = false; world.add(s); return s; });
+CHS.forEach((c, i) => { chMats[i].color.set(CH_TYPES[i].tint); c.blink = 0; });
+function seenByAny(c) {
+  const now = performance.now(), check = (x, z, dx, dz) => { const vx = c.x - x, vz = c.z - z, d = Math.hypot(vx, vz); return d < 60 && d > 0.01 && (vx * dx + vz * dz) / d > 0.8; };
+  const me = mePos(); if (me) { const ld = lookDir(); if (check(me.x, me.z, ld.x, ld.z)) return true; }
+  for (const a of avatars.values()) if (a.vis && now - a.last < 5000 && check(a.g.position.x, a.g.position.z, -Math.sin(a.yaw), -Math.cos(a.yaw))) return true;
+  return false;
+}
+function chTypeUpdate(now) {
+  for (let i = 1; i < NCH; i++) {
+    const c = CHS[i], tag = chTags[i], me = mePos();
+    tag.visible = c.on && !!me && Math.hypot(me.x - c.x, me.z - c.z) < 30;
+    if (tag.visible) tag.position.set(c.x, c.sp.position.y + 2.2, c.z);
+    if (i === 3) chMats[3].opacity = 0.55 + 0.3 * Math.abs(Math.sin(now / 170 + Math.sin(now / 53)));
+  }
+}
+
+// ---------- poziom trudności i ranking ----------
+function boardGet() { try { return JSON.parse(localStorage.getItem('lsj-board') || '{}'); } catch (e) { return {}; } }
+function boardAdd(sec) { const b = boardGet(), l = b[DIFF_KEY] || []; l.push({ t: sec, n: myName(), d: Date.now() }); l.sort((a, c) => a.t - c.t); b[DIFF_KEY] = l.slice(0, 5); try { localStorage.setItem('lsj-board', JSON.stringify(b)); } catch (e) { } }
+const fmtT = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function boardText(key) { const l = boardGet()[key] || []; return l.length ? l.map((e, i) => `${i + 1}. ${fmtT(e.t)} – ${String(e.n).slice(0, 16)}`).join('\n') : 'Brak ucieczek. Bądź pierwszy.'; }
+{
+  const modeRow = $('btnWalk').parentElement.nextElementSibling;
+  const row = document.createElement('div'); row.className = 'row';
+  for (const [k, d] of Object.entries(DIFFS)) {
+    const b = document.createElement('button'); b.className = 'b'; b.textContent = d.label; b.title = d.desc; b.style.background = DIFF_KEY === k ? '#c0392b' : '#1d2b38';
+    b.onclick = () => { if (DIFF_KEY === k) return; try { localStorage.setItem('lsj-diff', k); } catch (e) { } location.reload(); }; row.appendChild(b);
+  }
+  const desc = document.createElement('p'); desc.className = 'note'; desc.style.margin = '0 0 6px'; desc.textContent = DIFF.desc;
+  const board = document.createElement('details'); board.innerHTML = `<summary>Ranking ucieczek (${DIFF.label})</summary><pre style="font:12px/1.5 system-ui;margin:6px 0;white-space:pre-wrap">${boardText(DIFF_KEY)}</pre>`;
+  modeRow.after(row); row.after(desc); desc.after(board);
+  if (!STORY) { row.style.display = 'none'; desc.style.display = 'none'; board.style.display = 'none'; }
+}
+
+// ---------- intro fabularne ----------
+const intro = mk('position:absolute;inset:0;z-index:20;display:none;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,rgba(20,0,0,.82),rgba(0,0,0,.96));color:#eee;font:16px/1.6 system-ui,sans-serif;text-align:left;cursor:pointer');
+intro.innerHTML = `<div style="max-width:560px;padding:28px">
+<div style="font:900 40px/1.1 system-ui;letter-spacing:2px;color:#e8d9b0;text-shadow:0 0 18px #900">LITTLE SAINT ESCAPE</div>
+<p style="color:#bbb;margin:6px 0 18px">Poziom: <b style="color:#fff">${DIFF.label}</b> · życia: <b style="color:#ff6b6b">${DIFF.lives}</b></p>
+<p>Budzisz się na pomoście. Łodzi kapitana nie ma, a z zarośli coś na ciebie patrzy.</p>
+<p><b style="color:#ffb347">Cel:</b> znajdź 7 części, zanieś je po kolei na statek na końcu pomostu i odpłyń. Części leżą w innym miejscu w każdej grze.</p>
+<p><b style="color:#ffb347">Zasady przetrwania:</b><br>• Hałas ich ściąga. Sprint, auto i mikrofon słychać z daleka. Skradaj się klawiszem C.<br>• W nocy przychodzą kolejni: <b style="color:#ff7070">Ślepiec</b> słyszy wszystko, <b style="color:#ccc">Statua</b> rusza się, gdy nikt na nią nie patrzy, <b style="color:#9fb8ff">Upiór</b> pojawia się znikąd.<br>• Bez prądu nocą nie działa nic. Pilnuj generatora.<br>• Złapany kolega leży kilkadziesiąt sekund. Podejdź i reanimuj go, zanim przepadnie.</p>
+<p style="text-align:center;margin-top:22px;color:#ffcc66;font-weight:700">Kliknij, żeby zacząć</p></div>`;
+intro.onclick = () => { intro.style.display = 'none'; setWalk(); };
+$('btnWalk').onclick = () => { if (STORY && !renderer.xr.isPresenting && mode !== 'walk') intro.style.display = 'flex'; else setWalk(); };
+renderer.xr.addEventListener('sessionstart', () => { if (STORY) setTimeout(() => say(`Cel: zbierz 7 części i napraw statek na końcu pomostu. Hałas ich ściąga. Życia: ${lives}.`), 1500); });
+
+// ---------- jumpscare ----------
+const jsImg = document.createElement('img'); jsImg.style.cssText = 'position:absolute;left:50%;top:50%;height:120vh;transform:translate(-50%,-50%) scale(.6);opacity:0;pointer-events:none;z-index:15;filter:contrast(1.4) saturate(.6) brightness(.9);transition:transform .45s cubic-bezier(.2,2,.4,1),opacity .15s';
+document.body.appendChild(jsImg);
+function jumpscare() {
+  if (renderer.xr.isPresenting) return;
+  const im = chMats[0].map && chMats[0].map.image; try { jsImg.src = im instanceof HTMLCanvasElement ? im.toDataURL() : (im && im.src) || ''; } catch (e) { return; }
+  jsImg.style.transition = 'none'; jsImg.style.opacity = '1'; jsImg.style.transform = 'translate(-50%,-50%) scale(.5) rotate(-4deg)';
+  requestAnimationFrame(() => { jsImg.style.transition = 'transform .45s cubic-bezier(.2,2,.4,1),opacity .3s'; jsImg.style.transform = 'translate(-50%,-50%) scale(1.15) rotate(3deg)'; });
+  setTimeout(() => { jsImg.style.opacity = '0'; }, 750);
+}
+
+// ---------- reanimacja ----------
+const DOWNED = new Map(); let REV = null;
+const revMat = new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.45, depthWrite: false });
+function addDowned(id, p, name, ms) {
+  removeDowned(id);
+  const g = new THREE.Group(), y = Math.max(groundAt(p[0], p[2]), 0); g.position.set(p[0], y, p[2]);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.07, 6, 28), revMat); ring.rotation.x = Math.PI / 2; ring.position.y = 0.1; g.add(ring);
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 14, 10, 1, true), revMat); beam.position.y = 7; g.add(beam);
+  const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 2, 10), new THREE.MeshBasicMaterial({ visible: false })); hit.position.y = 1; g.add(hit);
+  hit.userData = { fn: () => startRevive(id), hint: `[E] / klik – reanimuj: ${name} (3 s, nie odchodź)` }; INTERACT.push(hit);
+  const tag = labelSprite('RATUJ: ' + name, 2.4, 0.5); tag.position.y = 2.8; g.add(tag);
+  world.add(g); DOWNED.set(id, { g, hit, ring, x: p[0], z: p[2], name, until: performance.now() + ms });
+}
+function removeDowned(id) { const d = DOWNED.get(id); if (!d) return; world.remove(d.g); const k = INTERACT.indexOf(d.hit); if (k >= 0) INTERACT.splice(k, 1); DOWNED.delete(id); if (REV && REV.id === id) REV = null; }
+function startRevive(id) { if (!playing() || mySeat >= 0 || !DOWNED.has(id)) return; REV = { id, t: 0 }; say(`Reanimacja: ${DOWNED.get(id).name}. Stój przy nim 3 sekundy.`); beep(520, 0.1); }
+function reviveUpdate(dt, now) {
+  for (const [id, d] of DOWNED) { if (now > d.until) { removeDowned(id); continue; } d.ring.scale.setScalar(1 + 0.15 * Math.sin(now / 150)); }
+  if (!REV) return; const d = DOWNED.get(REV.id), me = mePos();
+  if (!d || !me || Math.hypot(me.x - d.x, me.z - d.z) > 2.8) { REV = null; if (me) say('Reanimacja przerwana.'); return; }
+  REV.t += dt; noisePulse(40, 400);
+  if (Math.floor(REV.t * 3) !== Math.floor((REV.t - dt) * 3)) beep(600 + REV.t * 150, 0.05);
+  if (REV.t >= 3) { netSend({ t: 'rev', to: REV.id, p: [r2(me.x), r2(feetY()), r2(me.z)], n: myName() }); say(`Uratowałeś: ${d.name}!`); removeDowned(REV.id); [523, 659, 784].forEach((f, i) => setTimeout(() => beep(f, 0.1), i * 90)); }
+}
+function revived(d) {
+  if (!deadUntil || !okVec(d.p)) return;
+  if (STORY) lives = Math.max(lives, 0) + 1; eliminated = false; deadUntil = 0; invulnUntil = performance.now() + 5000;
+  const x = d.p[0] + 1.2, z = d.p[2] + 1.2, y = groundAt(x, z);
+  if (renderer.xr.isPresenting) teleport({ x, y, z }); else { PL.x = x; PL.z = z; PL.y = y; PL.vy = PL.hx = PL.hz = 0; }
+  netSend({ t: 'up' }); say(`${String(d.n || 'Kolega').slice(0, 16)} cię uratował!` + (STORY ? ` Życia: ${lives}.` : '')); [523, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, 0.12), i * 100));
+}
+
+// ---------- losowe zdarzenia: burza, zrzut, obława ----------
+const EV = { stormUntil: 0, hunt: null, drop: null, next: Date.now() + (STORY ? 150000 : 120000) + Math.random() * 90000, boltT: 5 };
+const storming = () => performance.now() < EV.stormUntil;
+function huntR(id, r) { return EV.hunt && EV.hunt.id === id && performance.now() < EV.hunt.until ? 1e6 : r; }
+const rainGeo = new THREE.BufferGeometry(), RAIN_N = 2200, rainPos = new Float32Array(RAIN_N * 3);
+for (let i = 0; i < RAIN_N; i++) { rainPos[i * 3] = (Math.random() - 0.5) * 70; rainPos[i * 3 + 1] = Math.random() * 30; rainPos[i * 3 + 2] = (Math.random() - 0.5) * 70; }
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+const rain = new THREE.Points(rainGeo, new THREE.PointsMaterial({ color: 0xaac8e8, size: 0.09, transparent: true, opacity: 0.7, depthWrite: false })); rain.visible = false; rain.frustumCulled = false; scene.add(rain);
+const bolt = mk('position:absolute;inset:0;background:#e8f0ff;opacity:0;pointer-events:none;transition:opacity .25s');
+function startEvent(k, d, local) {
+  const now = performance.now();
+  if (k === 'storm') { EV.stormUntil = now + 90000; if (playing()) say('Nadciąga burza. Deszcz zagłusza kroki, ale oni też gorzej widzą.'); }
+  else if (k === 'hunt' && typeof d.tg === 'string') {
+    EV.hunt = { id: d.tg, until: now + 35000 };
+    if (d.tg === (NET.id || 'me')) { say('OBŁAWA! Wiedzą, gdzie jesteś. Przetrwaj 35 sekund.'); scream(); } else if (playing()) say(`OBŁAWA! Polują na: ${String(d.n || 'gracza').slice(0, 16)}. 35 sekund.`);
+  } else if (k === 'drop' && Array.isArray(d.p) && d.p.length === 2 && d.p.every(Number.isFinite) && typeof d.id === 'string') spawnDrop(d.id, d.p[0], d.p[1]);
+}
+function spawnDrop(id, x, z) {
+  if (EV.drop) { world.remove(EV.drop.g); const k = INTERACT.indexOf(EV.drop.box); if (k >= 0) INTERACT.splice(k, 1); }
+  const g = new THREE.Group(), gy = groundAt(x, z), box = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.0, 1.3), lam(0x5d6b2f)); box.position.y = 0.5; g.add(box);
+  const band = new THREE.Mesh(new THREE.BoxGeometry(1.34, 0.12, 1.34), lam(0xd4a62a)); band.position.y = 0.6; g.add(band);
+  const chute = new THREE.Mesh(new THREE.SphereGeometry(2.6, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0xff7a1a, side: THREE.DoubleSide })); chute.position.y = 6; g.add(chute);
+  const flare = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 60, 8, 1, true), new THREE.MeshBasicMaterial({ color: 0x40ff60, transparent: true, opacity: 0.25, depthWrite: false })); flare.position.y = 30; flare.visible = false; g.add(flare);
+  g.position.set(x, gy + 90, z); world.add(g);
+  box.userData = { fn: () => openDrop(id), hint: '[E] / klik – otwórz zrzut' }; INTERACT.push(box);
+  EV.drop = { id, g, box, chute, flare, x, z, gy, landed: false };
+  const me = mePos(); if (me) { const ang = Math.atan2(x - me.x, -(z - me.z)) * 180 / Math.PI, dir = ['północ', 'północny wschód', 'wschód', 'południowy wschód', 'południe', 'południowy zachód', 'zachód', 'północny zachód'][Math.round(((ang + 360) % 360) / 45) % 8]; say(`Zrzut zaopatrzenia! Spada na ${dir}, ${Math.round(Math.hypot(x - me.x, z - me.z))} m od ciebie. Kto pierwszy, ten lepszy.`); }
+}
+function openDrop(id, remote) {
+  const D = EV.drop; if (!D || D.id !== id || (!remote && !D.landed)) return;
+  world.remove(D.g); const k = INTERACT.indexOf(D.box); if (k >= 0) INTERACT.splice(k, 1); EV.drop = null;
+  if (remote) return;
+  netSend({ t: 'dropx', id }); noisePulse(70, 2000);
+  const roll = rnd(4);
+  if (roll === 0) { flares += 2; store.set('lsj-flare', String(flares)); say('Zrzut: 2 flary!'); }
+  else if (roll === 1) { shields++; store.set('lsj-shield', String(shields)); say('Zrzut: amulet ochronny!'); }
+  else { const c = STORY ? 120 + rnd(130) : 250 + rnd(200); earn(c); say(`Zrzut: ${c} monet!`); }
+  [659, 880, 1175].forEach((f, i) => setTimeout(() => beep(f, 0.1), i * 80));
+}
+function eventsUpdate(dt, now) {
+  const D = EV.drop;
+  if (D && !D.landed) { D.g.position.y = Math.max(D.gy, D.g.position.y - 9 * dt); D.g.rotation.y += dt * 0.4; if (D.g.position.y <= D.gy) { D.landed = true; D.chute.visible = false; D.flare.visible = true; beep(120, 0.3, 0.06); } }
+  const st = storming(); rain.visible = st && (mode === 'walk' || mode === 'life');
+  if (rain.visible) {
+    const c = camera.getWorldPosition(new V3()); rain.position.set(c.x, c.y - 12, c.z);
+    for (let i = 0; i < RAIN_N; i++) { rainPos[i * 3 + 1] -= 26 * dt; if (rainPos[i * 3 + 1] < 0) rainPos[i * 3 + 1] += 30; }
+    rainGeo.attributes.position.needsUpdate = true;
+    if ((EV.boltT -= dt) <= 0) { EV.boltT = 5 + Math.random() * 9; bolt.style.transition = 'none'; bolt.style.opacity = renderer.xr.isPresenting ? '0' : '0.7'; hemi.intensity += 3; setTimeout(() => { bolt.style.transition = 'opacity .5s'; bolt.style.opacity = '0'; }, 70); setTimeout(thunder, 400 + Math.random() * 1500); }
+  }
+  if (!isAuth() || Date.now() < EV.next) return;
+  EV.next = Date.now() + (STORY ? 160000 : 130000) + Math.random() * 120000;
+  const players = [];
+  if (playing()) players.push({ id: NET.id || 'me', n: myName() });
+  for (const [id, a] of avatars) if (a.vis && now - a.last < 5000) players.push({ id, n: a.name });
+  if (!players.length) return;
+  const k = ['storm', 'drop', 'hunt', 'drop'][rnd(4)];
+  let d = {};
+  if (k === 'hunt') { const p = players[rnd(players.length)]; d = { tg: p.id, n: p.n }; }
+  if (k === 'drop') { let x = 0, z = 0; for (let t = 0; t < 60; t++) { x = -330 + Math.random() * 620; z = -200 + Math.random() * 400; if (hLSJ(x, z) > 3 && !blocked(x, z)) break; } d = { p: [r2(x), r2(z)], id: Math.random().toString(36).slice(2, 9) }; }
+  startEvent(k, d, true); netSend(Object.assign({ t: 'ev', k }, d));
+}
+
+// ---------- dźwięki otoczenia ----------
+let AMB = null;
+function noiseBuf(sec) { const n = AC.sampleRate * sec, b = AC.createBuffer(1, n, AC.sampleRate), d = b.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1; return b; }
+function ambInit() {
+  if (AMB || !AC) return;
+  try {
+    const buf = noiseBuf(3), mkN = (type, f, q) => { const s = AC.createBufferSource(); s.buffer = buf; s.loop = true; s.playbackRate.value = 0.7 + Math.random() * 0.6; const fl = AC.createBiquadFilter(); fl.type = type; fl.frequency.value = f; if (q) fl.Q.value = q; const g = AC.createGain(); g.gain.value = 0; s.connect(fl); fl.connect(g); g.connect(AC.destination); s.start(); return g; };
+    const cr = AC.createOscillator(), crg = AC.createGain(); cr.type = 'square'; cr.frequency.value = 4300; crg.gain.value = 0; cr.connect(crg); crg.connect(AC.destination); cr.start();
+    AMB = { sea: mkN('lowpass', 420), wind: mkN('bandpass', 700, 0.6), rain: mkN('highpass', 1800), cr: crg, birdT: 3, stepT: 0 };
+  } catch (e) { }
+}
+addEventListener('pointerdown', () => setTimeout(ambInit, 50)); addEventListener('keydown', () => setTimeout(ambInit, 50));
+function thunder() { try { const t = AC.currentTime, s = AC.createBufferSource(); s.buffer = noiseBuf(3); const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 160; const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.7, t + 0.08); g.gain.exponentialRampToValueAtTime(0.0001, t + 2.8); s.connect(f); f.connect(g); g.connect(AC.destination); s.start(t); } catch (e) { } }
+function chirp() { try { const t = AC.currentTime; for (let i = 0; i < 3; i++) { const o = AC.createOscillator(), g = AC.createGain(), s = t + i * 0.13, f0 = 2400 + Math.random() * 1200; o.frequency.setValueAtTime(f0, s); o.frequency.exponentialRampToValueAtTime(f0 * 1.5, s + 0.08); g.gain.setValueAtTime(0.012, s); g.gain.exponentialRampToValueAtTime(0.0001, s + 0.1); o.connect(g); g.connect(AC.destination); o.start(s); o.stop(s + 0.12); } } catch (e) { } }
+function step(v) { try { const t = AC.currentTime, s = AC.createBufferSource(); s.buffer = noiseBuf(0.15); const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 220; const g = AC.createGain(); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14); s.connect(f); f.connect(g); g.connect(AC.destination); s.start(t); } catch (e) { } }
+function ambUpdate(dt, now) {
+  if (!AMB) return;
+  const on = playing() || mode === 'walk', n = nightAmt(), st = storming(), me = mePos(), t = AC.currentTime;
+  let shore = 0; if (me) { for (const [dx, dz] of [[25, 0], [-25, 0], [0, 25], [0, -25]]) if (hNear(me.x + dx, me.z + dz) < 0) shore += 0.25; }
+  try {
+    AMB.sea.gain.setTargetAtTime(on ? 0.02 + 0.06 * shore + 0.02 * Math.sin(now / 2300) : 0, t, 0.5);
+    AMB.wind.gain.setTargetAtTime(on ? (st ? 0.07 : 0.012 + 0.01 * n) : 0, t, 0.6);
+    AMB.rain.gain.setTargetAtTime(on && st ? 0.06 : 0, t, 0.8);
+    AMB.cr.gain.setTargetAtTime(on && n > 0.5 && !st && (now % 1600) < 520 && Math.sin(now / 22) > 0.3 ? 0.0035 : 0, t, 0.01);
+  } catch (e) { }
+  if (on && n < 0.3 && !st && (AMB.birdT -= dt) <= 0) { AMB.birdT = 3 + Math.random() * 7; chirp(); }
+  if (me) { let best = Infinity; for (const c of CHS) if (c.on) best = Math.min(best, Math.hypot(me.x - c.x, me.z - c.z)); if (best < 30 && (AMB.stepT -= dt) <= 0) { step(0.05 + 0.25 * (1 - best / 30)); AMB.stepT = 0.32 + best / 30 * 0.55; } }
+}
+
+// ---------- niebo: chmury i gwiazdy ----------
+const cloudTex = canvasTex(256, 128, (g) => { for (let i = 0; i < 14; i++) { const x = 40 + Math.random() * 176, y = 50 + Math.random() * 40, r = 22 + Math.random() * 30, gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, 'rgba(255,255,255,.9)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); } });
+const CLOUDS = [];
+for (let i = 0; i < 26; i++) { const m = new THREE.SpriteMaterial({ map: cloudTex, transparent: true, depthWrite: false, opacity: 0.85 }), s = new THREE.Sprite(m); const a = Math.random() * 6.28, r = 1500 + Math.random() * 5000; s.position.set(Math.cos(a) * r, 700 + Math.random() * 700, Math.sin(a) * r); const sc = 900 + Math.random() * 900; s.scale.set(sc, sc * 0.45, 1); scene.add(s); CLOUDS.push(s); }
+const starGeo = new THREE.BufferGeometry(), starPos = new Float32Array(900 * 3);
+for (let i = 0; i < 900; i++) { const u = Math.random(), v = Math.random() * 0.9 + 0.08, th = u * Math.PI * 2, ph = Math.acos(1 - v); starPos[i * 3] = Math.sin(ph) * Math.cos(th) * 12000; starPos[i * 3 + 1] = Math.cos(ph) * 12000; starPos[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * 12000; }
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 2.2, sizeAttenuation: false, transparent: true, opacity: 0, fog: false, depthWrite: false })); stars.frustumCulled = false; scene.add(stars);
+function skyExtras(dt) {
+  const n = nightAmt(), st = storming();
+  stars.material.opacity = n * (st ? 0 : 0.9); stars.position.copy(camera.getWorldPosition(new V3()));
+  for (const c of CLOUDS) { c.position.x += dt * 12; if (c.position.x > 7000) c.position.x = -7000; c.material.opacity = st ? 0.95 : mix(0.85, 0.12, n); c.material.color.set(st ? 0x6a7280 : 0xffffff); }
+  if (st) { scene.fog.far = Math.min(scene.fog.far, 300); scene.fog.near = Math.min(scene.fog.near, 40); sun.intensity *= 0.35; waterMat.uniforms.fogN.value = scene.fog.near; waterMat.uniforms.fogF.value = scene.fog.far; }
+  for (const m of WIN_MATS) m.emissiveIntensity = n * (powerOn() ? 1.3 : 0);
+}
+
+// ---------- kompas do statku ----------
+const SHIP_P = { x: shoreX - 68, z: dockZ + 6 };
+const compass = mk('position:absolute;top:14px;left:50%;transform:translateX(-50%);color:#fff;font:700 15px system-ui,sans-serif;text-shadow:0 1px 3px #000;pointer-events:none;display:none;text-align:center');
+function compassUpdate() {
+  const me = mePos(), show = STORY && me && !renderer.xr.isPresenting && (carryPart >= 0 || delivered === ALL_PARTS);
+  compass.style.display = show ? 'block' : 'none'; if (!show) return;
+  const ld = lookDir(), vx = SHIP_P.x - me.x, vz = SHIP_P.z - me.z, ang = Math.atan2(ld.x * vz - ld.z * vx, ld.x * vx + ld.z * vz);
+  compass.innerHTML = `<div style="font-size:26px;transform:rotate(${(ang * 180 / Math.PI).toFixed(0)}deg)">⬆</div>Statek · ${Math.round(Math.hypot(vx, vz))} m`;
+}
+
+function megaUpdate(dt, now) { chTypeUpdate(now); reviveUpdate(dt, now); eventsUpdate(dt, now); ambUpdate(dt, now); skyExtras(dt); compassUpdate(); }
 
 // ================= pętla =================
 updateSun();
