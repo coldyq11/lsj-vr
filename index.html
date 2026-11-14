@@ -1397,6 +1397,7 @@ function extraNet(d) {
   else if (d.t === 'ban') { if (ok2(d.p) && typeof d.b === 'string' && d.b.length <= 16) addBanana(d.b, d.p[0], d.p[1]); }
   else if (d.t === 'banx') { if (typeof d.b === 'string') removeBanana(d.b, false); }
   else if (d.t === 'rtc') vcOnMsg(d);
+  else if (d.t === 'rb') { if (typeof d.k === 'string' && Number.isInteger(d.r)) rouOther(d.k, d.r); }
   else if (d.t === 'win') { if (STORY && Number.isFinite(d.s)) doWin(d.s, false); }
   else if (d.t === 'flare') { if (ok2(d.p)) addFlare(d.p[0], d.p[1]); }
   else if (d.t === 'race') { if (Number.isFinite(d.s) && playing()) say(`${String(d.n || 'Gracz').slice(0, 16)} ukończył wyścig: ${d.s.toFixed(1)} s`); }
@@ -1486,7 +1487,7 @@ function coinsUpdate(dt, now) {
 function horn() { if (mySeat < 0) return; noisePulse(150, 2500); beep(392, 0.35, 0.07); beep(494, 0.35, 0.05); { const v = VEH[myVeh]; netSend({ t: 'horn', p: [r2(v.x), r2(v.z)] }); } }
 
 // ================= content: dzień/noc, ragdoll, banany, jetpack, kurczaki, kryjówki, kasyno, wędka, questy, sejf, wyścig, golf, Great St. James =================
-const EXTRA_T = new Set(['ch', 'veh', 'die', 'stun', 'horn', 'altar', 'rag', 'ban', 'banx', 'race', 'win', 'flare', 'rtc']);
+const EXTRA_T = new Set(['ch', 'veh', 'die', 'stun', 'horn', 'altar', 'rag', 'ban', 'banx', 'race', 'win', 'flare', 'rtc', 'rb']);
 function mePos() { return playing() ? world.worldToLocal(camera.getWorldPosition(new V3())) : null; }
 function feetY() { return renderer.xr.isPresenting ? rig.position.y : PL.y; }
 function lookDir() { const d = camera.getWorldDirection(new V3()); d.y = 0; if (d.lengthSq() < 1e-6) d.set(0, 0, -1); return d.normalize(); }
@@ -1658,37 +1659,60 @@ const ROU = { x: S.temple.x + 3.3, z: S.temple.z - 0.8, bets: { r: [], b: [], z:
   ROU.wheel = new THREE.Mesh(cg, new THREE.MeshBasicMaterial({ map: tex })); ROU.wheel.position.set(ROU.x, ty + 0.105, wz); world.add(ROU.wheel);
   ROU.ball = new THREE.Mesh(new THREE.SphereGeometry(0.028, 10, 8), basic(0xffffff)); world.add(ROU.ball);
   ROU.cy = ty + 0.135; ROU.cz = wz; ROU.ballA = 0; ROU.ball.position.set(ROU.x + 0.45, ROU.cy, wz);
-  const ud = { fn: rouSpin, hint: '[E] / klik – zakręć kołem' }; rim.userData = ud; ROU.wheel.userData = ud; INTERACT.push(rim, ROU.wheel);
+  const ud = { fn: rouSpin, hint: 'Koło kręci się samo co 30 s' }; rim.userData = ud; ROU.wheel.userData = ud; INTERACT.push(rim, ROU.wheel);
   [['r', -0.44, 0xc0181d, 'czerwone (×2)'], ['b', 0, 0x141414, 'czarne (×2)'], ['z', 0.44, 0x0a8f3c, 'zero (×36)']].forEach(([k, ox, col, name]) => {
     const p = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.02, 0.6), lam(col)); p.position.set(ROU.x + ox, ty + 0.01, ROU.z + 0.7); world.add(p);
     p.userData = { fn: () => rouBet(k), hint: `[E] / klik – połóż żeton ${BET} na ${name}` }; INTERACT.push(p); ROU.pads[k] = p;
   });
-  ROU.show = board(0.95, 0.3, ROU.x, casY + 1.55, ROU.z - 1.18, 0); ROU.show('RULETKA', 'Połóż żeton, potem zakręć kołem');
+  ROU.show = board(0.95, 0.3, ROU.x, casY + 1.55, ROU.z - 1.18, 0); ROU.show('RULETKA', 'Wspólna runda co 30 s');
 }
+// wspólna ruletka: runda co 30 s według zegara, wynik liczony z kodu pokoju i numeru rundy, więc każdy widzi ten sam spin
+const ROU_MS = 30000, ROU_BET = 21000, ROU_SPIN = 7000, rouSalt = Math.random().toString(36).slice(2);
+ROU.round = -1; ROU.betRound = -1; ROU.others = []; ROU.lastTxt = ''; ROU.tick = 0; ROU.lastRes = '';
+function rouIdx(R) { let h = hashStr((NET.code || rouSalt) + ':' + R); h ^= h >>> 16; h = Math.imul(h, 2246822507); h ^= h >>> 13; h = Math.imul(h, 3266489909); h ^= h >>> 16; return (h >>> 0) % 37; }
+function rouChip(k, n, color, dx) { const c = new THREE.Mesh(chipGeo, lam(color)), p = ROU.pads[k].position; c.position.set(p.x + dx, p.y + 0.02 + n * 0.015, p.z); world.add(c); return c; }
 function rouBet(k) {
-  if (ROU.spin) return; const st = ROU.bets[k];
-  if (st.length >= 8) { say('Na tym polu leży już 8 żetonów.'); return; }
+  const now = Date.now(), R = Math.floor(now / ROU_MS);
+  if (now % ROU_MS >= ROU_BET) { say('Zakłady zamknięte. Poczekaj na następną rundę.'); return; }
+  const st = ROU.bets[k];
+  if (st.length >= 8) { say('Na tym polu masz już 8 żetonów.'); return; }
   if (!pay(BET)) return;
-  const c = new THREE.Mesh(chipGeo, lam(0xf2d24b)), p = ROU.pads[k].position; c.position.set(p.x, p.y + 0.02 + st.length * 0.015, p.z); world.add(c); st.push(c); beep(900, 0.03);
+  st.push(rouChip(k, st.length, 0xf2d24b, -0.08)); ROU.betRound = R; beep(900, 0.03); netSend({ t: 'rb', k, r: R });
 }
-function rouSpin() {
-  if (ROU.spin) return;
-  if (!(ROU.bets.r.length + ROU.bets.b.length + ROU.bets.z.length)) { say('Najpierw połóż żeton na jednym z pól.'); return; }
-  ROU.spin = { t: 0, T: 5.5, idx: rnd(37), W0: ROU.W, tick: 0 }; ROU.show('RULETKA', 'Koło się kręci...');
-}
+function rouOther(k, R) { if (!ROU.pads[k] || R !== Math.floor(Date.now() / ROU_MS) || ROU.others.length > 60) return; ROU.others.push(rouChip(k, ROU.others.filter(c => c.userData.k === k).length, 0x3b82f6, 0.1)); ROU.others[ROU.others.length - 1].userData.k = k; }
+function rouSpin() { say('Koło kręci się samo co 30 sekund. Połóż żetony na polach przed zamknięciem zakładów.'); }
 function rouUpdate(dt) {
-  const s = ROU.spin; if (!s) return;
-  s.t += dt; const k = Math.min(1, s.t / s.T), e = 1 - Math.pow(1 - k, 3), Wend = s.W0 + Math.PI * 6;
-  ROU.W = s.W0 + Math.PI * 6 * e; ROU.wheel.rotation.y = ROU.W;
-  const b = s.idx * Math.PI * 2 / 37 - Wend + Math.PI * 12 * (1 - e), rb = mix(0.54, 0.47, e);
-  ROU.ball.position.set(ROU.x + Math.cos(b) * rb, ROU.cy, ROU.cz + Math.sin(b) * rb);
-  if ((s.tick -= dt) <= 0 && k < 0.92) { beep(1400, 0.015, 0.02); s.tick = 0.05 + 0.3 * e; }
-  if (k < 1) return;
-  ROU.spin = null; const n = WHEEL[s.idx], col = n === 0 ? 'zielone' : REDS.has(n) ? 'czerwone' : 'czarne';
-  const win = (col === 'czerwone' ? ROU.bets.r.length * 2 : 0) * BET + (col === 'czarne' ? ROU.bets.b.length * 2 : 0) * BET + (n === 0 ? ROU.bets.z.length * 36 : 0) * BET;
-  for (const key of ['r', 'b', 'z']) { for (const c of ROU.bets[key]) world.remove(c); ROU.bets[key] = []; }
-  if (win) { earn(win); [659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, 0.1), i * 90)); }
-  ROU.show(`${n} ${col}`, win ? `Wygrana ${win}` : 'Przegrana'); say(`Ruletka: ${n} ${col}. ${win ? 'Wygrana ' + win + '!' : 'Przegrana.'}`);
+  const now = Date.now(), R = Math.floor(now / ROU_MS), ph = now % ROU_MS, idx = rouIdx(R), base = (R % 37) * 0.7;
+  if (R !== ROU.round) {                                   // nowa runda: sprzątanie żetonów z poprzedniej
+    ROU.round = R;
+    if (ROU.betRound !== R) for (const key of ['r', 'b', 'z']) { for (const c of ROU.bets[key]) world.remove(c); ROU.bets[key] = []; }
+    for (const c of ROU.others) world.remove(c); ROU.others = [];
+  }
+  let txt, sub;
+  if (ph < ROU_BET) {
+    ROU.wheel.rotation.y = base; const b0 = (rouIdx(R - 1)) * Math.PI * 2 / 37 - ((R - 1) % 37) * 0.7 - Math.PI * 6 + (base - (((R - 1) % 37) * 0.7 + Math.PI * 6));
+    ROU.ball.position.set(ROU.x + Math.cos(-b0) * 0.47, ROU.cy, ROU.cz + Math.sin(-b0) * 0.47);
+    txt = `Zakłady: ${Math.ceil((ROU_BET - ph) / 1000)} s`; sub = ROU.lastRes || `Żeton ${BET} na pole`;
+  } else {
+    const k = Math.min(1, (ph - ROU_BET) / ROU_SPIN), e = 1 - Math.pow(1 - k, 3), Wend = base + Math.PI * 6;
+    ROU.wheel.rotation.y = base + Math.PI * 6 * e;
+    const b = idx * Math.PI * 2 / 37 - Wend + Math.PI * 12 * (1 - e), rb = mix(0.54, 0.47, e);
+    ROU.ball.position.set(ROU.x + Math.cos(b) * rb, ROU.cy, ROU.cz + Math.sin(b) * rb);
+    if (k < 0.92 && (ROU.tick -= dt) <= 0) { const me = mePos(); if (me && Math.hypot(me.x - ROU.x, me.z - ROU.z) < 8) beep(1400, 0.015, 0.02); ROU.tick = 0.05 + 0.3 * e; }
+    const n = WHEEL[idx], col = n === 0 ? 'zielone' : REDS.has(n) ? 'czerwone' : 'czarne';
+    if (k < 1) { txt = 'Koło się kręci...'; sub = 'Zakłady zamknięte'; }
+    else {
+      txt = `${n} ${col}`; sub = 'Następna runda za chwilę'; ROU.lastRes = `Ostatnio: ${n} ${col}`;
+      if (ROU.betRound === R) {
+        ROU.betRound = -1;
+        const win = ((col === 'czerwone' ? ROU.bets.r.length * 2 : 0) + (col === 'czarne' ? ROU.bets.b.length * 2 : 0) + (n === 0 ? ROU.bets.z.length * 36 : 0)) * BET;
+        for (const key of ['r', 'b', 'z']) { for (const c of ROU.bets[key]) world.remove(c); ROU.bets[key] = []; }
+        if (win) { earn(win); [659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, 0.1), i * 90)); }
+        say(`Ruletka: ${n} ${col}. ${win ? 'Wygrana ' + win + '!' : 'Przegrana.'}`);
+      }
+    }
+  }
+  if (txt + sub !== ROU.lastTxt) { ROU.lastTxt = txt + sub; ROU.show(txt, sub); }
 }
 const BJT = { x: S.temple.x - 4.2, z: S.temple.z - 3.2, p: [], d: [], on: false, meshes: [], tex: {} };
 const bjSum = h => { let s = 0, a = 0; for (const c of h) { if (c.r === 1) { a++; s += 11; } else s += Math.min(c.r, 10); } while (s > 21 && a) { s -= 10; a--; } return s; };
