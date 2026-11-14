@@ -1,0 +1,29 @@
+{
+  "name": "little-saint-james",
+  "productName": "Little Saint James",
+  "version": "1.0.0",
+  "description": "Little Saint James - wersja desktop (bez VR)",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "build:app": "node build.mjs",
+    "start": "node build.mjs && electron .",
+    "dist:win": "node build.mjs && electron-builder --win portable nsis",
+    "dist:linux": "node build.mjs && electron-builder --linux dir"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "mqtt": "5.16.1",
+    "three": "0.160.0"
+  },
+  "build": {
+    "appId": "pl.lsj.game",
+    "productName": "Little Saint James",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "app/**/*"],
+    "win": { "artifactName": "LittleSaintJames-${version}-${arch}-${target}.${ext}" },
+    "portable": { "artifactName": "LittleSaintJames-${version}-portable.exe" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "artifactName": "LittleSaintJames-${version}-setup.exe" }
+  }
+}
