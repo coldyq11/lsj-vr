@@ -2007,7 +2007,7 @@ kiosk(shoreX - 68.2, dockZ + 6, Math.PI / 2, 'STATEK',
 function fxUpdate(dt, now) {
   if (now - sprintT > 800 && stamina < 1) stamina = Math.min(1, stamina + dt / 10);
   if (!playing()) scare = 0;
-  if (deadUntil && deadUntil !== Infinity && now >= deadUntil) { deadUntil = 0; toSpawn(); invulnUntil = now + 6000; say(STORY ? `Wracasz do gry. Życia: ${lives}` : 'Wracasz do gry.'); }
+  if (deadUntil && deadUntil !== Infinity && now >= deadUntil) { deadUntil = 0; toSpawn(); invulnUntil = now + 6000; for (let i = 0; i < NCH; i++) if (CHS[i].on && Math.hypot(CHS[i].x - SPAWN.x, CHS[i].z - SPAWN.z) < 80) { if (isAuth()) relocateChaser(i); else netSend({ t: 'die', i }); } say(STORY ? `Wracasz do gry. Życia: ${lives}` : 'Wracasz do gry.'); }
   vig.style.opacity = renderer.xr.isPresenting ? '0' : String(Math.pow(scare, 1.4));
   if ((hudT -= dt) <= 0) {
     hudT = 0.2; const xr = renderer.xr.isPresenting, inGame = mode === 'walk' && !xr;
