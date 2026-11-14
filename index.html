@@ -74,6 +74,7 @@
     <p><b>Auto:</b> podejdź i <kbd>E</kbd>/spust. <kbd>W</kbd><kbd>S</kbd> gaz, <kbd>A</kbd><kbd>D</kbd> skręt, <kbd>E</kbd> wysiądź. VR: lewa gałka, <kbd>B</kbd>/<kbd>Y</kbd> wysiądź.</p>
     <p><b>Nowe:</b> <kbd>G</kbd> (VR: grip) – rzuć banana, przytrzymaj <kbd>Spację</kbd> (VR: <kbd>A</kbd>) – jetpack, helikopter: <kbd>Spacja</kbd> w górę, <kbd>C</kbd> w dół (VR: prawa gałka). Noc zapada co 10 minut.</p>
     <p><b>Przetrwanie:</b> <kbd>Shift</kbd> (VR: wciśnij lewą gałkę) – sprint, zużywa kondycję. <kbd>F</kbd> – latarka, <kbd>T</kbd> (VR: wciśnij prawą gałkę) – flara. Teleporty ma tylko administrator.</p>
+    <p><b>Hałas:</b> sprint, auto, klakson i mówienie przez mikrofon ściągają goniących z daleka. <kbd>C</kbd> / <kbd>Ctrl</kbd> (VR: kucnij naprawdę) – skradanie. <kbd>V</kbd> lub przycisk w prawym górnym rogu – mikrofon.</p>
   </details>
   <p class="note">Rekonstrukcja poglądowa: teren generowany proceduralnie, budynki rozmieszczone w przybliżeniu wg publicznych opisów i zdjęć lotniczych. Wnętrza i kasyno są wymyślone. Postacie są fikcyjne. Automaty grają na wirtualne żetony.</p>
 </div>
@@ -551,6 +552,7 @@ function spin(M, remote = null) {
   let stops;
   if (remote) stops = remote.s;
   else {
+    if (!powerOn()) { M.msg = 'Brak prądu – generator'; drawAll(); return; }
     if (credits < M.bet) {
       M.msg = credits < BETS[0] ? 'Brak kasy – praca czeka na przystani' : 'Za mało kredytów – zmień stawkę';
       drawAll(); return;
@@ -800,13 +802,13 @@ function walkUpdate(dt) {
   if (KEYS.KeyD || KEYS.ArrowRight) fx += 1; if (KEYS.KeyA || KEYS.ArrowLeft) fx -= 1;
   if (PL.hx || PL.hz) { const nx = PL.x + PL.hx * dt, nz = PL.z + PL.hz * dt; if (PL.y - groundAt(PL.x, PL.z) < 2.5 && PL.vy < 8) { const r = resolve(PL.x, PL.z, nx, nz); PL.x = r.x; PL.z = r.z; } else { PL.x = nx; PL.z = nz; } }
   else if (fx || fz) {
-    const L = Math.hypot(fx, fz), sp = moveSpeed(!!(KEYS.ShiftLeft || KEYS.ShiftRight), dt, 4, 7.5) * dt; fx /= L; fz /= L;
+    const L = Math.hypot(fx, fz), sp = (crouching() ? 2 : moveSpeed(!!(KEYS.ShiftLeft || KEYS.ShiftRight), dt, 4, 7.5)) * dt; fx /= L; fz /= L;
     const nx = PL.x + (-Math.sin(yaw) * fz + Math.cos(yaw) * fx) * sp, nz = PL.z + (-Math.cos(yaw) * fz - Math.sin(yaw) * fx) * sp;
     const r = resolve(PL.x, PL.z, nx, nz); PL.x = r.x; PL.z = r.z;
   }
   { const gy = groundAt(PL.x, PL.z, PL.y); trampCheck(PL, PL.x, PL.z); jetThrust(PL, !!KEYS.Space, dt); physY(PL, gy, dt); { const cc = ceilAt(PL.x, PL.z, PL.y); if (PL.y + 1.8 > cc) { PL.y = cc - 1.8; if (PL.vy > 0) PL.vy = 0; } }
     if (PL.wet) { PL.wet = false; PL.x = CANNON.x + 2; PL.z = CANNON.z + 2; PL.y = groundAt(PL.x, PL.z); say('Plusk! Wracasz pod armatę.'); } }
-  camera.position.set(PL.x, PL.y + 1.65, PL.z); camera.rotation.set(pitch, yaw, 0, 'YXZ');
+  camera.position.set(PL.x, PL.y + eyeH, PL.z); camera.rotation.set(pitch, yaw, 0, 'YXZ');
   const h = centerHit(), hint = $('hint');
   if (h) { hint.textContent = h.object.userData.hint || (h.object.userData.a === 'spin' ? '[E] / klik – zakręć' : '[E] / klik – zmień stawkę'); hint.style.display = 'block'; } else hint.style.display = 'none';
 }
@@ -957,7 +959,7 @@ function joinCode(code) {
   netReset();
   const myId = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
   const topic = 'lsjvr2026/room/' + code + '/' + GAME_MODE;
-  NET.code = code; NET.id = myId; NET.topic = topic;
+  NET.code = code; NET.id = myId; NET.topic = topic; placeParts(hashStr(code));
   netStatus(`Pokój: ${code} · łączę z serwerem…`);
   BROKERS.forEach((url, i) => {
     const c = mqtt.connect(url, { clientId: 'lsj_' + myId + '_' + i, clean: true, connectTimeout: 10000, reconnectPeriod: 4000, keepalive: 30, will: { topic, payload: JSON.stringify({ t: 'leave', id: myId }), qos: 0, retain: false } });
@@ -982,7 +984,7 @@ const r2 = v => Math.round(v * 100) / 100;
 const okVec = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
 function myState() {
   const vis = ((renderer.xr.isPresenting && mode === 'life') || (!renderer.xr.isPresenting && mode === 'walk')) && !deadUntil && !gameWon;
-  const msg = { t: 'st', n: myName(), v: vis ? 1 : 0, s: mySeat, vh: myVeh, hd: hiding ? 1 : 0, gs: delivered };
+  const msg = { t: 'st', n: myName(), v: vis ? 1 : 0, s: mySeat, vh: myVeh, hd: hiding ? 1 : 0, gs: delivered, nz: Math.round(myNoise), vo: VC.on ? 1 : 0, gu: genUntil };
   if (vis) {
     const h = world.worldToLocal(camera.getWorldPosition(new V3())), d = camera.getWorldDirection(new V3());
     msg.p = [r2(h.x), r2(h.y), r2(h.z)]; msg.y = r2(Math.atan2(-d.x, -d.z));
@@ -997,7 +999,7 @@ function applyNet(d) {
     let a = avatars.get(d.id); if (!a) { a = makeAvatar(d.id, name); avatars.set(d.id, a); }
     if (Number.isFinite(d.ts)) { if (d.ts <= (a.ts || 0)) return; a.ts = d.ts; }
     if (a.name !== name) { a.g.remove(a.tag); a.tag = labelSprite(name, 0.9, 0.2); a.tag.position.y = 0.42; a.g.add(a.tag); a.name = name; }
-    a.last = performance.now(); a.vis = !!d.v && okVec(d.p); a.seat = Number.isInteger(d.s) ? d.s : -1; a.veh = Number.isInteger(d.vh) ? d.vh : -1; a.hid = !!d.hd; if (STORY && Number.isInteger(d.gs) && d.gs >= 0 && d.gs <= ALL_PARTS) delivered |= d.gs;
+    a.last = performance.now(); a.vis = !!d.v && okVec(d.p); a.seat = Number.isInteger(d.s) ? d.s : -1; a.veh = Number.isInteger(d.vh) ? d.vh : -1; a.hid = !!d.hd; a.vo = !!d.vo; a.noise = Number.isFinite(d.nz) ? clampN(d.nz, 0, 200) : 0; if (Number.isFinite(d.gu) && d.gu > genUntil && d.gu < Date.now() + 1200000) genUntil = d.gu; if (STORY && Number.isInteger(d.gs) && d.gs >= 0 && d.gs <= ALL_PARTS) delivered |= d.gs;
     if (a.vis) {
       const first = !a.g.visible; a.tgt.set(d.p[0], d.p[1], d.p[2]); if (first) a.g.position.copy(a.tgt);
       if (Number.isFinite(d.y)) a.yaw = d.y;
@@ -1071,7 +1073,7 @@ document.body.appendChild(flash);
 let hasKey = store.get('lsj-key') === '1', shields = Number(store.get('lsj-shield')) || 0, boostUntil = 0, carrying = false, invulnUntil = 0;
 let deposit = Number(store.get('lsj-dep')) || 0;
 function boost() { return performance.now() < boostUntil ? 1.6 : 1; }
-function pay(cost) { if (credits < cost) { say(`Za mało kasy – potrzebujesz ${cost}, masz ${credits}.`); return false; } credits -= cost; saveCredits(); drawAll(); return true; }
+function pay(cost) { if (!powerOn()) { say('Brak prądu. Zatankuj generator na zapleczu technicznym.'); return false; } if (credits < cost) { say(`Za mało kasy – potrzebujesz ${cost}, masz ${credits}.`); return false; } credits -= cost; saveCredits(); drawAll(); return true; }
 function earn(n) { credits += n; saveCredits(); drawAll(); }
 
 // ---------- terminale (jedyny interfejs do pieniędzy) ----------
@@ -1343,10 +1345,10 @@ function chaserUpdate(dt, now) {
   if (!night && wasNight && me) say('Świta. Nocni goście znikają.');
   wasNight = night;
   const speed = night ? (bloodMoon() ? 6.4 : 5.4) : 4.5;
-  const targets = [];
+  const targets = [], sight = night ? (bloodMoon() ? 70 : 28) : 35;
   if (auth) {
-    if (me && now > invulnUntil && !hiding) targets.push(me);
-    for (const a of avatars.values()) if (a.vis && !a.hid && now - a.last < 5000) targets.push(a.g.position);
+    if (me && now > invulnUntil && !hiding) targets.push({ x: me.x, z: me.z, r: Math.max(sight, myNoise) });
+    for (const a of avatars.values()) if (a.vis && !a.hid && now - a.last < 5000) targets.push({ x: a.g.position.x, z: a.g.position.z, r: Math.max(sight, a.noise || 0) });
   }
   let nearest = Infinity;
   for (let i = 0; i < NCH; i++) {
@@ -1354,7 +1356,8 @@ function chaserUpdate(dt, now) {
     if (auth) {
       if (now > c.stunUntil) {
         let best = null, bd = Infinity;
-        for (const t of targets) { const d = Math.hypot(t.x - c.x, t.z - c.z); if (d < bd) { bd = d; best = t; } }
+        for (const t of targets) { const d = Math.hypot(t.x - c.x, t.z - c.z); if (d < bd && d < t.r) { bd = d; best = t; } }
+        if (best) c.inv = { x: best.x, z: best.z, until: now + 7000 }; else if (c.inv && now < c.inv.until && Math.hypot(c.inv.x - c.x, c.inv.z - c.z) > 1.5) best = c.inv;
         const fl = nearFlare(c); if (fl) best = fl; if (!best) best = patrol(c);
         if (best) { const gx = best.x + Math.cos(i * 1.57) * 0.8 * (i ? 1 : 0), gz = best.z + Math.sin(i * 1.57) * 0.8 * (i ? 1 : 0), gd = Math.hypot(gx - c.x, gz - c.z); if (gd > 0.3) { const k = Math.min(1, (best.slow ? speed * 0.4 : speed) * dt / gd); c.x += (gx - c.x) * k; c.z += (gz - c.z) * k; } }
         for (const [bid, b] of BANS) if (Math.hypot(b.x - c.x, b.z - c.z) < 0.9) { removeBanana(bid, true); stunChaser(i, true); break; }
@@ -1393,6 +1396,7 @@ function extraNet(d) {
   else if (d.t === 'rag') { if (okVec(d.p)) spawnRag(d.p[0], d.p[1], d.p[2], colorFor(d.id)); }
   else if (d.t === 'ban') { if (ok2(d.p) && typeof d.b === 'string' && d.b.length <= 16) addBanana(d.b, d.p[0], d.p[1]); }
   else if (d.t === 'banx') { if (typeof d.b === 'string') removeBanana(d.b, false); }
+  else if (d.t === 'rtc') vcOnMsg(d);
   else if (d.t === 'win') { if (STORY && Number.isFinite(d.s)) doWin(d.s, false); }
   else if (d.t === 'flare') { if (ok2(d.p)) addFlare(d.p[0], d.p[1]); }
   else if (d.t === 'race') { if (Number.isFinite(d.s) && playing()) say(`${String(d.n || 'Gracz').slice(0, 16)} ukończył wyścig: ${d.s.toFixed(1)} s`); }
@@ -1479,10 +1483,10 @@ function coinsUpdate(dt, now) {
 }
 
 // klakson
-function horn() { if (mySeat < 0) return; beep(392, 0.35, 0.07); beep(494, 0.35, 0.05); { const v = VEH[myVeh]; netSend({ t: 'horn', p: [r2(v.x), r2(v.z)] }); } }
+function horn() { if (mySeat < 0) return; noisePulse(150, 2500); beep(392, 0.35, 0.07); beep(494, 0.35, 0.05); { const v = VEH[myVeh]; netSend({ t: 'horn', p: [r2(v.x), r2(v.z)] }); } }
 
 // ================= content: dzień/noc, ragdoll, banany, jetpack, kurczaki, kryjówki, kasyno, wędka, questy, sejf, wyścig, golf, Great St. James =================
-const EXTRA_T = new Set(['ch', 'veh', 'die', 'stun', 'horn', 'altar', 'rag', 'ban', 'banx', 'race', 'win', 'flare']);
+const EXTRA_T = new Set(['ch', 'veh', 'die', 'stun', 'horn', 'altar', 'rag', 'ban', 'banx', 'race', 'win', 'flare', 'rtc']);
 function mePos() { return playing() ? world.worldToLocal(camera.getWorldPosition(new V3())) : null; }
 function feetY() { return renderer.xr.isPresenting ? rig.position.y : PL.y; }
 function lookDir() { const d = camera.getWorldDirection(new V3()); d.y = 0; if (d.lengthSq() < 1e-6) d.set(0, 0, -1); return d.normalize(); }
@@ -1510,7 +1514,7 @@ function skyUpdate() {
   waterMat.uniforms.skyC.value.copy(DAY_W).lerp(NIGHT_W, n);
   sun.intensity = mix(2.0, 0.06, n); hemi.intensity = mix(0.9, 0.11, n);
   moon.visible = n > 0.3; moonMat.color.set(b ? 0xc21a1a : 0xf5f3e0);
-  for (const l of nightLamps) l.intensity = n * 30;
+  for (const l of nightLamps) l.intensity = powerOn() ? n * 30 : 0;
 }
 
 // ---------- ragdoll po śmierci ----------
@@ -1754,7 +1758,7 @@ const ITEMS = [];
 function item(x, z, color, hint, activeFn, onPick, size = 0.5) {
   const p = safeSpot(x, z), m = new THREE.Mesh(new THREE.BoxGeometry(size, size, size), lam(color));
   m.position.set(p.x, -999, p.z); m.userData = { fn: onPick, hint: '[E] / klik – ' + hint }; world.add(m); INTERACT.push(m);
-  ITEMS.push({ m, y: groundAt(p.x, p.z) + 0.7, activeFn });
+  const it = { m, y: groundAt(p.x, p.z) + 0.7, activeFn, pos: p }; ITEMS.push(it); return it;
 }
 let Q = { shears: 0, fish: 0, rum: 0 }; try { Object.assign(Q, JSON.parse(store.get('lsj-q') || '{}')); } catch (e) { }
 const saveQ = () => store.set('lsj-q', JSON.stringify(Q));
@@ -1869,7 +1873,7 @@ const gsjG = new THREE.Group(); world.add(gsjG);
 
 function extrasUpdate(dt, now) {
   const me = mePos();
-  skyUpdate(); ragsUpdate(dt); bananasUpdate(me, now); chickensUpdate(me, dt, now); fishingUpdate(me, now); raceUpdate(now); golfUpdate(dt); rouUpdate(dt); fxUpdate(dt, now);
+  skyUpdate(); ragsUpdate(dt); bananasUpdate(me, now); chickensUpdate(me, dt, now); fishingUpdate(me, now); raceUpdate(now); golfUpdate(dt); rouUpdate(dt); fxUpdate(dt, now); moreUpdate(dt, now);
   for (const it of ITEMS) { it.m.position.y = it.activeFn() ? it.y : -999; it.m.rotation.y += dt; }
   if (hiding && (!me || Math.hypot(me.x - hiding.x, me.z - hiding.z) > 1.9)) { hiding = null; if (me) say('Wyszedłeś z kryjówki.'); }
   hideOv.style.opacity = hiding && !renderer.xr.isPresenting ? '0.6' : '0';
@@ -1968,10 +1972,11 @@ function takePart(k) {
   if (carryPart >= 0) { say(`Niesiesz już: ${PART_NAMES[carryPart]}. Najpierw zanieś ją na statek.`); return false; }
   carryPart = k; say(`Masz: ${PART_NAMES[k]}. Zanieś na statek na końcu pomostu. Jeśli zginiesz, część wraca na miejsce.`); beep(660, 0.08); return true;
 }
-item(S.util2.x, S.util2.z + 10, 0xff7a00, 'weź akumulator', () => partFree(0), () => takePart(0), 0.45);
-item(rumP.x + 5, rumP.z, 0xff7a00, 'weź śrubę napędową', () => partFree(1), () => takePart(1), 0.45);
-item(S.g2.x - 12, S.g2.z - 9, 0xff7a00, 'weź świece zapłonowe', () => partFree(2), () => takePart(2), 0.45);
-item(S.tennis.x + 5, S.tennis.z + 13, 0xff7a00, 'weź pompę zęzową', () => partFree(6) && isNight(), () => takePart(6), 0.45);
+const PART_IT = [];
+PART_IT[0] = item(S.util2.x, S.util2.z + 10, 0xff7a00, 'weź akumulator', () => partFree(0), () => takePart(0), 0.45);
+PART_IT[1] = item(rumP.x + 5, rumP.z, 0xff7a00, 'weź śrubę napędową', () => partFree(1), () => takePart(1), 0.45);
+PART_IT[2] = item(S.g2.x - 12, S.g2.z - 9, 0xff7a00, 'weź świece zapłonowe', () => partFree(2), () => takePart(2), 0.45);
+PART_IT[6] = item(S.tennis.x + 5, S.tennis.z + 13, 0xff7a00, 'weź pompę zęzową', () => partFree(6) && isNight(), () => takePart(6), 0.45);
 kiosk(S.main.x + 2.1, S.main.z - 8.4, 0, 'CZĘŚCI', () => [`Kasa: ${credits}`, `Flary: ${flares}`, STORY ? ((delivered & 8) ? 'Paliwo: zamontowane' : 'Paliwo: brak') : 'Paliwo: tylko fabuła'],
   [
     { label: 'Kanister paliwa – 700', fn: () => { if (!STORY) { say('Kanister przydaje się tylko w trybie fabuły.'); return; } if (delivered & 8) { say('Paliwo jest już na statku.'); return; } if (carryPart >= 0) { say(`Niesiesz już: ${PART_NAMES[carryPart]}.`); return; } if (pay(700)) takePart(3); } },
@@ -1993,7 +1998,7 @@ kiosk(shoreX - 68.2, dockZ + 6, Math.PI / 2, 'STATEK',
   () => { if (!STORY) return ['Tryb freegame', 'Ucieczka działa', 'tylko w fabule']; const miss = []; for (let i = 0; i < NPARTS; i++) if (!(delivered & (1 << i))) miss.push(PART_NAMES[i]); return [`Części: ${bitCount(delivered)}/${NPARTS}`, ...miss.slice(0, 3), miss.length > 3 ? `...i ${miss.length - 3} więcej` : (miss.length ? '' : 'Gotowy do drogi!')]; },
   [
     { label: 'Zamontuj część', fn: () => { if (!STORY) return; if (carryPart < 0) { say('Nie niesiesz żadnej części.'); return; } delivered |= 1 << carryPart; say(`Zamontowano: ${PART_NAMES[carryPart]}. Części: ${bitCount(delivered)}/${NPARTS}.`); carryPart = -1; [523, 784].forEach((f, i) => setTimeout(() => beep(f, 0.12), i * 110)); } },
-    { label: 'Wskazówka', fn: () => { if (!STORY) return; for (let i = 0; i < NPARTS; i++) if (!(delivered & (1 << i)) && carryPart !== i) { say(PART_HINT[i]); return; } say(carryPart >= 0 ? 'Zamontuj niesioną część.' : 'Statek gotowy. Odpływajcie!'); } },
+    { label: 'Wskazówka', fn: () => { if (!STORY) return; for (let i = 0; i < NPARTS; i++) if (!(delivered & (1 << i)) && carryPart !== i) { say(partHint(i)); return; } say(carryPart >= 0 ? 'Zamontuj niesioną część.' : 'Statek gotowy. Odpływajcie!'); } },
     { label: 'Odpłyń', fn: () => { if (!STORY) return; if (delivered !== ALL_PARTS) { say(`Statek nie popłynie. Brakuje części: ${NPARTS - bitCount(delivered)}.`); return; } doWin((Date.now() - runStart) / 1000, true); } }
   ], 0x1f3a5f);
 
@@ -2024,6 +2029,138 @@ function fxUpdate(dt, now) {
   for (let i = FLARES.length - 1; i >= 0; i--) { const f = FLARES[i]; f.m.scale.setScalar(1 + 0.3 * Math.sin(now / 50)); if (now > f.until) { world.remove(f.m); FLARES.splice(i, 1); } }
   spot.intensity = (flashOn || (renderer.xr.isPresenting && nightAmt() > 0.5)) ? 60 : 0;
   waterMat.uniforms.wsc.value.set(water.scale.x, water.scale.z);
+}
+
+// ================= hałas i skradanie, losowe części, generator, czat głosowy, HUD na nadgarstku =================
+let myNoise = 5, noisePulseR = 0, noisePulseUntil = 0, eyeH = 1.65, moreT = 0; const lastP = new V3(); let lastPSet = false, mySpeed = 0;
+function noisePulse(r, ms) { noisePulseR = r; noisePulseUntil = performance.now() + ms; }
+function crouching() { return renderer.xr.isPresenting ? camera.position.y < 1.15 : !!(KEYS.KeyC || KEYS.ControlLeft) && mySeat < 0; }
+
+// ---------- losowe położenie części (wspólne dla pokoju: ziarno z kodu) ----------
+const PART_SPOTS = [[S.util2.x, S.util2.z + 10], [S.g2.x - 12, S.g2.z - 9], [S.g1.x - 6, S.g1.z - 12], [S.g3.x + 13, S.g3.z - 6], [S.g4.x - 12, S.g4.z + 10], [S.heli.x - 6, S.heli.z + 22], [S.desal.x - 12, S.desal.z + 8], [S.temple.x + 14, S.temple.z + 14], [S.tennis.x + 5, S.tennis.z + 13], [S.library.x - 14, S.library.z + 4], [-20, 60], [150, -110], [-300, -20], [200, 40]].map(([x, z]) => safeSpot(x, z));
+function gsjShore(dx, dz) { let p = { x: GSJ.x, z: GSJ.z }; const L = Math.hypot(dx, dz); for (let s = 0; s < 900; s += 2) { const x = GSJ.x + dx / L * s, z = GSJ.z + dz / L * s; if (hOthers(x, z) < 2.5) break; p = { x, z }; } return safeSpot(p.x + 5, p.z); }
+const GSJ_BEACH = [gsjShore(-GSJ.x, -GSJ.z), gsjShore(1, 0.25), gsjShore(-1, 0.1)];
+function hashStr(s) { let h = 2166136261; for (const ch of s) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; }
+function movePart(k, p) { const it = PART_IT[k]; if (!it) return; it.m.position.x = p.x; it.m.position.z = p.z; it.y = groundAt(p.x, p.z) + 0.7; it.pos = p; }
+function placeParts(seed) {
+  const r = rng(seed), idx = PART_SPOTS.map((_, i) => i);
+  for (let i = idx.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+  movePart(0, PART_SPOTS[idx[0]]); movePart(2, PART_SPOTS[idx[1]]); movePart(6, PART_SPOTS[idx[2]]); movePart(1, GSJ_BEACH[Math.floor(r() * GSJ_BEACH.length)]);
+}
+placeParts(crypto.getRandomValues(new Uint32Array(1))[0]);
+function partHint(k) {
+  const it = PART_IT[k];
+  if (!it || !it.pos || k === 1) return PART_HINT[k];
+  const p = it.pos, ns = p.z < -45 ? 'północ' : p.z > 45 ? 'południe' : '', ew = p.x < -110 ? 'zachód' : p.x > 110 ? 'wschód' : '';
+  return `${PART_NAMES[k]}: pomarańczowa skrzynka, ${[ns, ew].filter(Boolean).join(' i ') || 'środek'} wyspy.` + (k === 6 ? ' Widać ją tylko nocą.' : '');
+}
+
+// ---------- generator: nocą bez prądu nie działają sklepy, kasyno ani lampy ----------
+let genUntil = 0; const GEN_COST = 80, GEN_MS = 300000;
+function powerOn() { return !isNight() || Date.now() < genUntil; }
+kiosk(S.util.x - 5 * Math.cos(0.2) + 8.2 * Math.sin(0.2), S.util.z + 5 * Math.sin(0.2) + 8.2 * Math.cos(0.2), 0.2, 'GENERATOR',
+  () => { const left = genUntil - Date.now(); return [left > 0 ? `Paliwo: ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}` : 'Paliwo: PUSTO', isNight() ? (powerOn() ? 'Prąd: jest' : 'Prąd: BRAK') : 'Dzień: prąd z paneli', `Kasa: ${credits}`]; },
+  [{ label: `Zatankuj (+5 min) – ${GEN_COST}`, fn: () => {
+    if (genUntil - Date.now() > 600000) { say('Zbiornik jest pełny.'); return; }
+    if (credits < GEN_COST) { say(`Za mało kasy – potrzebujesz ${GEN_COST}, masz ${credits}.`); return; }
+    credits -= GEN_COST; saveCredits(); drawAll(); genUntil = Math.max(Date.now(), genUntil) + GEN_MS; say('Generator zatankowany. Prądu wystarczy na 5 minut nocy więcej.'); beep(110, 0.4, 0.06);
+  } }], 0xb58900);
+
+// ---------- czat głosowy zbliżeniowy (WebRTC, sygnalizacja przez pokój) ----------
+const VC = { on: false, stream: null, pcs: new Map(), seen: new Set(), cool: new Map(), an: null, buf: null, level: 0 };
+const micBtn = document.createElement('button');
+micBtn.style.cssText = 'position:absolute;top:12px;right:12px;z-index:5;border:0;border-radius:10px;padding:9px 14px;font:600 14px system-ui,sans-serif;color:#fff;cursor:pointer';
+function micPaint() { micBtn.textContent = VC.on ? '🎤 Głos: WŁ (V)' : '🎤 Głos: WYŁ (V)'; micBtn.style.background = VC.on ? '#1e8e3e' : 'rgba(12,22,32,.85)'; }
+micBtn.onclick = () => voiceToggle(); document.body.appendChild(micBtn); micPaint();
+addEventListener('keydown', e => { if (e.target.tagName !== 'INPUT' && e.code === 'KeyV') voiceToggle(); });
+function vcClose(id) { const o = VC.pcs.get(id); if (!o) return; try { o.pc.close(); } catch (e) { } o.audio.srcObject = null; VC.pcs.delete(id); VC.cool.set(id, performance.now() + 5000); }
+async function voiceToggle() {
+  if (VC.on) { VC.on = false; for (const id of [...VC.pcs.keys()]) vcClose(id); if (VC.stream) VC.stream.getTracks().forEach(t => t.stop()); VC.stream = null; VC.an = null; VC.level = 0; micPaint(); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { say('Ta przeglądarka nie udostępnia mikrofonu.'); return; }
+  try { VC.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); } catch (e) { say('Brak dostępu do mikrofonu. Zezwól na niego w przeglądarce.'); return; }
+  VC.on = true; micPaint(); sfxInit();
+  try { const src = AC.createMediaStreamSource(VC.stream); VC.an = AC.createAnalyser(); VC.an.fftSize = 512; VC.buf = new Uint8Array(512); src.connect(VC.an); } catch (e) { VC.an = null; }
+  say(NET.id ? 'Mikrofon włączony. Słychać cię z bliska, goniący też cię słyszą.' : 'Mikrofon włączony. Zadziała po dołączeniu do pokoju.');
+}
+function vcSend(to, k, d) { netSend({ t: 'rtc', to, k, d, mid: Math.random().toString(36).slice(2) }); }
+function vcPeer(id, initiator) {
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] });
+  const o = { pc, audio: new Audio(), made: performance.now(), q: [] }; o.audio.autoplay = true; VC.pcs.set(id, o);
+  VC.stream.getTracks().forEach(t => pc.addTrack(t, VC.stream));
+  pc.onicecandidate = e => { if (e.candidate) vcSend(id, 'ice', e.candidate.toJSON()); };
+  pc.ontrack = e => { o.audio.srcObject = e.streams[0]; o.audio.volume = 0; const p = o.audio.play(); if (p && p.catch) p.catch(() => { }); };
+  if (initiator) pc.createOffer().then(of => pc.setLocalDescription(of)).then(() => vcSend(id, 'offer', pc.localDescription.toJSON())).catch(() => { });
+  return o;
+}
+function vcFlush(o) { for (const c of o.q) o.pc.addIceCandidate(c).catch(() => { }); o.q = []; }
+function vcOnMsg(d) {
+  if (d.to !== NET.id || !VC.on || !VC.stream || typeof d.mid !== 'string' || VC.seen.has(d.mid) || !d.d || typeof d.d !== 'object') return;
+  VC.seen.add(d.mid); let o = VC.pcs.get(d.id);
+  if (d.k === 'offer') {
+    if (o) { try { o.pc.close(); } catch (e) { } VC.pcs.delete(d.id); }
+    o = vcPeer(d.id, false);
+    o.pc.setRemoteDescription(d.d).then(() => { vcFlush(o); return o.pc.createAnswer(); }).then(a => o.pc.setLocalDescription(a)).then(() => vcSend(d.id, 'answer', o.pc.localDescription.toJSON())).catch(() => { });
+  } else if (!o) return;
+  else if (d.k === 'answer') { if (o.pc.signalingState === 'have-local-offer') o.pc.setRemoteDescription(d.d).then(() => vcFlush(o)).catch(() => { }); }
+  else if (d.k === 'ice') { if (o.pc.remoteDescription) o.pc.addIceCandidate(d.d).catch(() => { }); else o.q.push(d.d); }
+}
+function vcUpdate(now) {
+  if (VC.an) { VC.an.getByteTimeDomainData(VC.buf); let s = 0; for (let i = 0; i < VC.buf.length; i++) { const v = (VC.buf[i] - 128) / 128; s += v * v; } VC.level = Math.sqrt(s / VC.buf.length); }
+  if (!VC.on || !NET.id) { for (const id of [...VC.pcs.keys()]) vcClose(id); return; }
+  const ear = world.worldToLocal(camera.getWorldPosition(new V3()));
+  for (const [id, a] of avatars) {
+    const live = a.vo && now - a.last < 5000;
+    if (live && !VC.pcs.has(id) && NET.id < id && now > (VC.cool.get(id) || 0)) vcPeer(id, true);
+    const o = VC.pcs.get(id); if (!o) continue;
+    if (!live) { vcClose(id); continue; }
+    const st = o.pc.connectionState;
+    if (st === 'failed' || st === 'closed' || (st !== 'connected' && now - o.made > 15000)) { vcClose(id); continue; }
+    const d = a.vis ? ear.distanceTo(a.g.position) : 20;
+    o.audio.volume = Math.pow(clampN(1 - d / 45, 0, 1), 1.5);
+  }
+  for (const id of [...VC.pcs.keys()]) if (!avatars.has(id)) vcClose(id);
+}
+
+// ---------- HUD na lewym nadgarstku (VR) ----------
+const wristCv = document.createElement('canvas'); wristCv.width = 256; wristCv.height = 128;
+const wristTex = new THREE.CanvasTexture(wristCv); wristTex.colorSpace = THREE.SRGBColorSpace;
+const wrist = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.065), new THREE.MeshBasicMaterial({ map: wristTex, transparent: true })); wrist.position.set(0, 0.035, 0.09); wrist.rotation.x = -1.2;
+function wristUpdate(now) {
+  const c = ctrls.find(k => k.userData.src && k.userData.src.handedness === 'left'); if (!c) return;
+  if (wrist.parent !== c) c.add(wrist);
+  const g = wristCv.getContext('2d'); g.clearRect(0, 0, 256, 128); g.fillStyle = 'rgba(12,22,32,.85)'; g.fillRect(0, 0, 256, 128);
+  g.font = 'bold 30px sans-serif'; g.textBaseline = 'middle'; g.textAlign = 'left';
+  if (STORY) { g.fillStyle = '#ff4d4d'; g.fillText('♥'.repeat(Math.max(0, lives)), 10, 24); g.fillStyle = '#fff'; g.font = 'bold 22px sans-serif'; g.fillText(`Części ${bitCount(delivered)}/${NPARTS}`, 118, 24); }
+  else { g.fillStyle = '#fff'; g.font = 'bold 22px sans-serif'; g.fillText('Freegame', 10, 24); }
+  g.fillStyle = 'rgba(255,255,255,.25)'; g.fillRect(10, 46, 236, 12); g.fillStyle = now < staminaLock ? '#e74c3c' : '#f1c40f'; g.fillRect(10, 46, 236 * stamina, 12);
+  g.fillStyle = 'rgba(255,255,255,.25)'; g.fillRect(10, 66, 236, 12); g.fillStyle = myNoise > 50 ? '#e74c3c' : myNoise > 20 ? '#e67e22' : '#2ecc71'; g.fillRect(10, 66, 236 * clampN(myNoise / 90, 0.04, 1), 12);
+  g.fillStyle = '#fff'; g.font = '19px sans-serif';
+  g.fillText((carryPart >= 0 ? 'Niesiesz: ' + PART_NAMES[carryPart] : (VC.on ? 'Mikrofon wł.' : 'Mikrofon wył.')) , 10, 100);
+  g.fillText(powerOn() ? '' : 'BRAK PRĄDU', 10, 120);
+  wristTex.needsUpdate = true;
+}
+const hud2 = document.createElement('div'); hud2.style.cssText = 'position:absolute;left:14px;bottom:44px;color:#fff;font:600 13px system-ui,sans-serif;text-shadow:0 1px 3px #000;pointer-events:none;display:none'; document.body.appendChild(hud2);
+
+function moreUpdate(dt, now) {
+  const me = mePos();
+  if (me) { if (lastPSet && dt > 0) mySpeed += (Math.hypot(me.x - lastP.x, me.z - lastP.z) / dt - mySpeed) * Math.min(1, dt * 8); lastP.copy(me); lastPSet = true; } else { lastPSet = false; mySpeed = 0; }
+  let nz = 5;
+  if (me) {
+    if (mySeat >= 0) { const v = VEH[myVeh]; nz = v.kind === 'heli' ? 120 : Math.abs(v.speed) > 1 ? (v.kind === 'car' ? 90 : 70) : 10; }
+    else if (crouching()) nz = mySpeed > 0.3 ? 8 : 3;
+    else nz = mySpeed > 5.5 ? 60 : mySpeed > 0.5 ? 25 : 5;
+    if (VC.level > 0.05) nz = Math.max(nz, Math.min(80, 25 + VC.level * 350));
+    if (now < noisePulseUntil) nz = Math.max(nz, noisePulseR);
+  }
+  myNoise = nz;
+  eyeH += ((crouching() ? 1.0 : 1.65) - eyeH) * Math.min(1, dt * 12);
+  if ((moreT -= dt) > 0) return; moreT = 0.25;
+  vcUpdate(now);
+  if (renderer.xr.isPresenting) { wristUpdate(now); hud2.style.display = 'none'; }
+  else {
+    const show = mode === 'walk'; hud2.style.display = show ? 'block' : 'none';
+    if (show) hud2.innerHTML = `Hałas <span style="display:inline-block;width:90px;height:7px;background:rgba(255,255,255,.25);border-radius:4px;vertical-align:middle"><span style="display:block;height:7px;border-radius:4px;width:${Math.round(clampN(myNoise / 90, 0.04, 1) * 90)}px;background:${myNoise > 50 ? '#e74c3c' : myNoise > 20 ? '#e67e22' : '#2ecc71'}"></span></span>` + (powerOn() ? '' : ' &nbsp; <span style="color:#ff6b6b">BRAK PRĄDU – zatankuj generator</span>');
+  }
 }
 
 // ================= pętla =================
