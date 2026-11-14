@@ -804,7 +804,7 @@ addEventListener('pointermove', e => {
   yaw -= e.movementX * 0.0022; pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.0022, -1.45, 1.45);
 });
 function centerHit() { centerRay.setFromCamera(new THREE.Vector2(0, 0), camera); return centerRay.intersectObjects(INTERACT, false)[0]; }
-function interactCenter() { const h = centerHit(); if (h) doAction(h.object.userData); }
+function interactCenter() { const h = centerHit(); if (h) doAction(h.object.userData); else { const id = nearDowned(); if (id) startRevive(id); } }
 function setWalk() {
   if (renderer.xr.isPresenting) return;
   mode = 'walk'; fly = null; controls.enabled = false; labels.visible = false;
@@ -834,7 +834,7 @@ function walkUpdate(dt) {
     if (PL.wet) { PL.wet = false; PL.x = CANNON.x + 2; PL.z = CANNON.z + 2; PL.y = groundAt(PL.x, PL.z); say('Plusk! Wracasz pod armatę.'); } }
   camera.position.set(PL.x, PL.y + eyeH, PL.z); camera.rotation.set(pitch, yaw, 0, 'YXZ');
   const h = centerHit(), hint = $('hint');
-  if (h) { hint.textContent = h.object.userData.hint || (h.object.userData.a === 'spin' ? '[E] / klik – zakręć' : '[E] / klik – zmień stawkę'); hint.style.display = 'block'; } else hint.style.display = 'none';
+  if (h) { hint.textContent = h.object.userData.hint || (h.object.userData.a === 'spin' ? '[E] / klik – zakręć' : '[E] / klik – zmień stawkę'); hint.style.display = 'block'; } else { const nd = nearDowned(); if (nd && !REV) { hint.textContent = `[E] – reanimuj: ${DOWNED.get(nd).name}`; hint.style.display = 'block'; } else if (REV) { hint.textContent = `Reanimacja... ${Math.min(100, Math.round(REV.t / 3 * 100))}%`; hint.style.display = 'block'; } else hint.style.display = 'none'; }
 }
 
 // ================= VR =================
@@ -888,7 +888,7 @@ for (let i = 0; i < 2; i++) {
   c.userData = { src: null, prevA: false, turned: false, aim: false, hit: null };
   c.addEventListener('connected', e => { c.userData.src = e.data; });
   c.addEventListener('disconnected', () => { c.userData.src = null; });
-  c.addEventListener('selectstart', () => { if (mySeat >= 0) { horn(); return; } if (tryInteract(c)) return; if (mode === 'life') c.userData.aim = true; });
+  c.addEventListener('selectstart', () => { if (mySeat >= 0) { horn(); return; } if (tryInteract(c)) return; { const nd = nearDowned(); if (nd) { startRevive(nd); return; } } if (mode === 'life') c.userData.aim = true; });
   c.addEventListener('selectend', () => { if (c.userData.aim && c.userData.hit) teleport(c.userData.hit); c.userData.aim = false; c.userData.hit = null; marker.visible = false; c.userData.line.scale.z = 3; });
   const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new V3(), new V3(0, 0, -1)]), new THREE.LineBasicMaterial({ color: 0x9fe8ff }));
   line.scale.z = 3; c.add(line); c.userData.line = line;
@@ -2300,6 +2300,7 @@ function addDowned(id, p, name, ms) {
   world.add(g); DOWNED.set(id, { g, hit, ring, x: p[0], z: p[2], name, until: performance.now() + ms });
 }
 function removeDowned(id) { const d = DOWNED.get(id); if (!d) return; world.remove(d.g); const k = INTERACT.indexOf(d.hit); if (k >= 0) INTERACT.splice(k, 1); DOWNED.delete(id); if (REV && REV.id === id) REV = null; }
+function nearDowned() { const me = mePos(); if (!me) return null; for (const [id, d] of DOWNED) if (Math.hypot(me.x - d.x, me.z - d.z) < 2.6) return id; return null; }
 function startRevive(id) { if (!playing() || mySeat >= 0 || !DOWNED.has(id)) return; REV = { id, t: 0 }; say(`Reanimacja: ${DOWNED.get(id).name}. Stój przy nim 3 sekundy.`); beep(520, 0.1); }
 function reviveUpdate(dt, now) {
   for (const [id, d] of DOWNED) { if (now > d.until) { removeDowned(id); continue; } d.ring.scale.setScalar(1 + 0.15 * Math.sin(now / 150)); }
