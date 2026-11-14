@@ -30,7 +30,7 @@
   #hint{position:absolute;left:50%;top:calc(50% + 28px);transform:translateX(-50%);color:#fff;background:rgba(0,0,0,.55);padding:4px 10px;border-radius:6px;font-size:13px;pointer-events:none;display:none}
   @media (max-width:600px){#panel{width:calc(100% - 56px)}}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.16.1/dist/mqtt.min.js"></script>
 <script type="importmap">
 {"imports":{
   "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -50,7 +50,7 @@
     <summary>Multiplayer</summary>
     <div class="row"><input id="nick" placeholder="Twój nick" maxlength="16"></div>
     <div class="row"><button class="b" id="btnHost">Stwórz pokój</button></div>
-    <div class="row"><input id="code" placeholder="KOD" maxlength="5" style="text-transform:uppercase"><button class="b" id="btnJoin">Dołącz</button></div>
+    <div class="row"><input id="code" placeholder="KOD" maxlength="4" style="text-transform:uppercase"><button class="b" id="btnJoin">Dołącz</button></div>
     <p id="net">Offline</p>
   </details>
   <ul id="places"></ul>
@@ -530,7 +530,7 @@ function spin(M, remote = null) {
     }
     credits -= M.bet; saveCredits();
     stops = [randStop(), randStop(), randStop()];
-    netSend({ t: 'spin', m: M.idx, s: stops });
+    netSend({ t: 'spin', m: M.idx, s: stops, sid: Math.random().toString(36).slice(2) });
   }
   M.spinning = true; M.remote = remote ? remote.n : null; M.stops = stops; M.lastWin = remote ? M.lastWin : 0;
   M.msg = remote ? `Gra: ${remote.n}` : 'Powodzenia!';
@@ -848,59 +848,51 @@ function handleInput(dt) {
   if (moving) shadowDirty = true; else if (shadowDirty) { shadowDirty = false; updateSun(); }
 }
 
-// ================= multiplayer (PeerJS, WebRTC P2P, gospodarz przekazuje wiadomości) =================
-const PREFIX = 'lsjvr-2026-';
-const NET = { peer: null, host: false, conns: new Map(), hc: null, id: null, acc: 0 };
+// ================= multiplayer (MQTT przez WebSocket – serwer pośredniczy, działa w każdej sieci) =================
+const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
+const NET = { clients: [], topic: null, id: null, code: null, acc: 0, stAcc: 0, seenSpin: new Set() };
 const netStatus = t => { $('net').textContent = t; };
 $('nick').value = store.get('lsj-nick') || ('Gracz' + Math.floor(Math.random() * 900 + 100));
 $('nick').onchange = () => store.set('lsj-nick', $('nick').value);
 const myName = () => ($('nick').value || 'Gracz').slice(0, 16);
+const randCode = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
+const connectedCount = () => NET.clients.filter(c => c.connected).length;
 function netReset() {
-  try { if (NET.peer) NET.peer.destroy(); } catch (e) { }
-  NET.peer = null; NET.host = false; NET.conns.clear(); NET.hc = null; NET.id = null;
+  for (const c of NET.clients) { try { if (c.connected) c.publish(NET.topic, JSON.stringify({ t: 'leave', id: NET.id })); c.end(true); } catch (e) { } }
+  NET.clients = []; NET.topic = null; NET.id = null; NET.code = null; NET.seenSpin.clear();
   for (const id of [...avatars.keys()]) removeAvatar(id);
 }
-function peerError(e) {
-  const t = e && e.type;
-  if (t === 'peer-unavailable') netStatus('Nie ma pokoju o tym kodzie.');
-  else if (t === 'unavailable-id') netStatus('Kod zajęty – kliknij „Stwórz pokój” jeszcze raz.');
-  else if (t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed') netStatus('Brak połączenia z serwerem. Multiplayer działa na stronie hostowanej (np. GitHub Pages), nie w podglądzie artefaktu.');
-  else netStatus('Błąd sieci: ' + (t || e));
+function refreshStatus() {
+  if (!NET.code) return;
+  const n = connectedCount(), now = performance.now();
+  const players = 1 + [...avatars.values()].filter(a => now - a.last < 5000).length;
+  netStatus(n ? `Pokój: ${NET.code} · graczy: ${players} · serwery: ${n}/${BROKERS.length}` : `Pokój: ${NET.code} · łączę z serwerem…`);
 }
-function hostRoom() {
-  if (!window.Peer) { netStatus('Nie wczytano biblioteki PeerJS.'); return; }
+function joinCode(code) {
+  if (!window.mqtt) { netStatus('Nie wczytano biblioteki MQTT – sprawdź internet i odśwież stronę.'); return; }
   netReset();
-  const code = Array.from(crypto.getRandomValues(new Uint8Array(4)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
-  netStatus('Tworzę pokój…');
-  const peer = NET.peer = new Peer(PREFIX + code, { debug: 0 });
-  peer.on('open', id => { NET.id = id; NET.host = true; netStatus(`Pokój: ${code} – podaj kod kolegom`); });
-  peer.on('connection', c => {
-    c.on('open', () => { NET.conns.set(c.peer, c); netStatus(`Pokój: ${code} · graczy: ${NET.conns.size + 1}`); });
-    c.on('data', d => { if (!d || typeof d !== 'object') return; d.id = c.peer; applyNet(d); for (const [pid, o] of NET.conns) if (pid !== c.peer && o.open) o.send(d); });
-    c.on('close', () => { NET.conns.delete(c.peer); removeAvatar(c.peer); for (const o of NET.conns.values()) if (o.open) o.send({ t: 'leave', id: c.peer }); netStatus(`Pokój: ${code} · graczy: ${NET.conns.size + 1}`); });
+  const myId = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
+  const topic = 'lsjvr2026/room/' + code;
+  NET.code = code; NET.id = myId; NET.topic = topic;
+  netStatus(`Pokój: ${code} · łączę z serwerem…`);
+  BROKERS.forEach((url, i) => {
+    const c = mqtt.connect(url, { clientId: 'lsj_' + myId + '_' + i, clean: true, connectTimeout: 10000, reconnectPeriod: 4000, keepalive: 30, will: { topic, payload: JSON.stringify({ t: 'leave', id: myId }), qos: 0, retain: false } });
+    c.on('connect', () => { c.subscribe(topic, { qos: 0 }); refreshStatus(); });
+    c.on('close', refreshStatus);
+    c.on('error', () => { });
+    c.on('message', (t, payload) => { if (NET.id !== myId) return; let d; try { d = JSON.parse(payload.toString()); } catch (e) { return; } if (d && typeof d === 'object') applyNet(d); });
+    NET.clients.push(c);
   });
-  peer.on('error', peerError);
+  setTimeout(() => { if (NET.id === myId && !connectedCount()) netStatus('Nie udało się połączyć z żadnym serwerem – sprawdź internet lub zaporę.'); }, 12000);
 }
-function joinRoom() {
-  if (!window.Peer) { netStatus('Nie wczytano biblioteki PeerJS.'); return; }
-  const code = $('code').value.trim().toUpperCase(); if (!/^[A-Z0-9]{4,5}$/.test(code)) { netStatus('Wpisz 4-znakowy kod pokoju.'); return; }
-  netReset(); netStatus('Łączę…');
-  const peer = NET.peer = new Peer(undefined, { debug: 0 });
-  peer.on('open', id => {
-    NET.id = id;
-    const c = NET.hc = peer.connect(PREFIX + code);
-    c.on('open', () => netStatus(`Połączono z pokojem ${code}`));
-    c.on('data', d => { if (d && typeof d === 'object') applyNet(d); });
-    c.on('close', () => { netStatus('Rozłączono z pokojem.'); for (const id of [...avatars.keys()]) removeAvatar(id); });
-  });
-  peer.on('error', peerError);
-}
-$('btnHost').onclick = hostRoom; $('btnJoin').onclick = joinRoom;
+$('btnHost').onclick = () => joinCode(randCode());
+$('btnJoin').onclick = () => { const code = $('code').value.trim().toUpperCase(); if (!/^[A-Z0-9]{4}$/.test(code)) { netStatus('Wpisz 4-znakowy kod pokoju.'); return; } joinCode(code); };
+addEventListener('pagehide', () => { for (const c of NET.clients) { try { if (c.connected) c.publish(NET.topic, JSON.stringify({ t: 'leave', id: NET.id })); } catch (e) { } } });
 function netSend(msg) {
   if (!NET.id) return;
-  msg.id = NET.id;
-  if (NET.host) { for (const c of NET.conns.values()) if (c.open) c.send(msg); }
-  else if (NET.hc && NET.hc.open) NET.hc.send(msg);
+  msg.id = NET.id; msg.ts = Date.now();
+  const s = JSON.stringify(msg);
+  for (const c of NET.clients) if (c.connected) c.publish(NET.topic, s, { qos: 0 });
 }
 const r2 = v => Math.round(v * 100) / 100;
 const okVec = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
@@ -919,6 +911,7 @@ function applyNet(d) {
   if (d.t === 'st') {
     const name = String(d.n || 'Gracz').slice(0, 16);
     let a = avatars.get(d.id); if (!a) { a = makeAvatar(d.id, name); avatars.set(d.id, a); }
+    if (Number.isFinite(d.ts)) { if (d.ts <= (a.ts || 0)) return; a.ts = d.ts; }
     if (a.name !== name) { a.g.remove(a.tag); a.tag = labelSprite(name, 0.9, 0.2); a.tag.position.y = 0.42; a.g.add(a.tag); a.name = name; }
     a.last = performance.now(); a.vis = !!d.v && okVec(d.p);
     if (a.vis) {
@@ -927,6 +920,7 @@ function applyNet(d) {
       for (let i = 0; i < 2; i++) { const hv = Array.isArray(d.h) ? d.h[i] : null; a.hands[i].visible = okVec(hv); if (okVec(hv)) a.hands[i].position.set(hv[0], hv[1], hv[2]); }
     }
   } else if (d.t === 'spin') {
+    if (typeof d.sid !== 'string' || NET.seenSpin.has(d.sid)) return; NET.seenSpin.add(d.sid);
     const M = MACHINES[d.m];
     if (M && Array.isArray(d.s) && d.s.length === 3 && d.s.every(v => Number.isInteger(v) && v >= 0 && v < NSTOP)) {
       const a = avatars.get(d.id); spin(M, { s: d.s, n: a ? a.name : 'Gracz' });
@@ -959,6 +953,7 @@ function avatarsUpdate(dt) {
 }
 function netUpdate(dt) {
   if (!NET.id) return;
+  NET.stAcc += dt; if (NET.stAcc > 1) { NET.stAcc = 0; refreshStatus(); }
   NET.acc += dt; if (NET.acc < 1 / 12) return; NET.acc = 0;
   netSend(myState());
 }
