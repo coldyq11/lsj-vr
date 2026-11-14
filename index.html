@@ -2434,6 +2434,7 @@ function compassUpdate() {
   compass.innerHTML = `<div style="font-size:26px;transform:rotate(${(ang * 180 / Math.PI).toFixed(0)}deg)">⬆</div>Statek · ${Math.round(Math.hypot(vx, vz))} m`;
 }
 
+window.LSJ_DEBUG.ev = k => { if (!isAdmin()) return; EV.next = 0; const d = k === 'hunt' ? { tg: NET.id || 'me', n: myName() } : k === 'drop' ? (() => { const me = mePos() || { x: 0, z: 0 }; return { p: [r2(me.x + 15), r2(me.z)], id: Math.random().toString(36).slice(2, 9) }; })() : {}; EV.next = Date.now() + 200000; startEvent(k, d, true); netSend(Object.assign({ t: 'ev', k }, d)); };
 function megaUpdate(dt, now) { chTypeUpdate(now); reviveUpdate(dt, now); eventsUpdate(dt, now); ambUpdate(dt, now); skyExtras(dt); compassUpdate(); }
 
 // ================= pętla =================
