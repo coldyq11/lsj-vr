@@ -455,7 +455,7 @@ function payout(a, b, c) { if (a === b && b === c) return PAY3[a]; if (a === 'C'
 let RTP = 0; for (const a of STRIP) for (const b of STRIP) for (const c of STRIP) RTP += payout(a, b, c); RTP /= NSTOP ** 3;
 const BETS = [1, 5, 10, 25];
 const randStop = () => crypto.getRandomValues(new Uint32Array(1))[0] % NSTOP; // 2^32 dzieli się przez 16 – brak obciążenia
-let credits = Number(store.get('lsj-credits')); if (!Number.isFinite(credits) || credits < 0) credits = 1000;
+const savedCr = store.get('lsj-credits'); let credits = savedCr === null ? 1000 : Number(savedCr); if (!Number.isFinite(credits) || credits < 1) credits = 1000;
 const saveCredits = () => store.set('lsj-credits', String(credits));
 
 function drawSym(g, s, cx, cy, sz) {
