@@ -71,8 +71,9 @@
     <kbd>B</kbd>/<kbd>Y</kbd> – szybka podróż do kolejnego miejsca<br>
     <kbd>spust</kbd> na przycisku/dźwigni automatu – gra; w innym miejscu przytrzymaj i puść = teleport<br>
     <kbd>A</kbd>/<kbd>X</kbd> – tryb: 1:1 → makieta → olbrzym (w makiecie gałka obraca i skaluje)</p>
+    <p><b>Auto:</b> podejdź i <kbd>E</kbd>/spust. <kbd>W</kbd><kbd>S</kbd> gaz, <kbd>A</kbd><kbd>D</kbd> skręt, <kbd>E</kbd> wysiądź. VR: lewa gałka, <kbd>B</kbd>/<kbd>Y</kbd> wysiądź.</p>
   </details>
-  <p class="note">Rekonstrukcja poglądowa: teren generowany proceduralnie, budynki rozmieszczone w przybliżeniu wg publicznych opisów i zdjęć lotniczych. Wnętrza i kasyno są wymyślone. Automaty grają na wirtualne żetony.</p>
+  <p class="note">Rekonstrukcja poglądowa: teren generowany proceduralnie, budynki rozmieszczone w przybliżeniu wg publicznych opisów i zdjęć lotniczych. Wnętrza i kasyno są wymyślone. Postacie są fikcyjne. Automaty grają na wirtualne żetony.</p>
 </div>
 
 <script type="module">
@@ -455,7 +456,7 @@ function payout(a, b, c) { if (a === b && b === c) return PAY3[a]; if (a === 'C'
 let RTP = 0; for (const a of STRIP) for (const b of STRIP) for (const c of STRIP) RTP += payout(a, b, c); RTP /= NSTOP ** 3;
 const BETS = [1, 5, 10, 25];
 const randStop = () => crypto.getRandomValues(new Uint32Array(1))[0] % NSTOP; // 2^32 dzieli się przez 16 – brak obciążenia
-const savedCr = store.get('lsj-credits'); let credits = savedCr === null ? 1000 : Number(savedCr); if (!Number.isFinite(credits) || credits < 1) credits = 1000;
+const savedCr = store.get('lsj-credits'); let credits = savedCr === null ? 300 : Number(savedCr); if (!Number.isFinite(credits) || credits < 0) credits = 300;
 const saveCredits = () => store.set('lsj-credits', String(credits));
 
 function drawSym(g, s, cx, cy, sz) {
@@ -533,8 +534,7 @@ function spin(M, remote = null) {
   if (remote) stops = remote.s;
   else {
     if (credits < M.bet) {
-      if (credits < BETS[0]) { credits = 1000; saveCredits(); M.msg = 'Darmowe doładowanie: 1000'; }
-      else M.msg = 'Za mało kredytów – zmień stawkę';
+      M.msg = credits < BETS[0] ? 'Brak kasy – praca czeka na przystani' : 'Za mało kredytów – zmień stawkę';
       drawAll(); return;
     }
     credits -= M.bet; saveCredits();
@@ -560,7 +560,7 @@ function finishSpin(M) {
   drawAll();
 }
 function cycleBet(M) { if (M.spinning) return; M.bet = BETS[(BETS.indexOf(M.bet) + 1) % BETS.length]; beep(440, 0.04); drawDisplay(M); }
-function doAction(u) { const M = MACHINES[u.m]; if (!M) return; if (u.a === 'spin') spin(M); else cycleBet(M); }
+function doAction(u) { if (u.fn) { u.fn(); return; } const M = MACHINES[u.m]; if (!M) return; if (u.a === 'spin') spin(M); else cycleBet(M); }
 function slotsUpdate(dt) {
   for (const M of MACHINES) {
     if (M.leverT > 0) { M.leverT = Math.max(0, M.leverT - dt); M.lever.rotation.x = Math.sin(Math.PI * (1 - M.leverT / 0.35)) * 0.9; }
@@ -723,14 +723,14 @@ function toastVR(msg) {
   vrToast = labelSprite(msg, 0.6, 0.13); vrToast.position.set(0, -0.22, -1); camera.add(vrToast); vrToastT = 2;
 }
 function tpWalk(i) {
-  const t = TP[i]; if (!t) return;
+  const t = TP[i]; if (!t) return; leaveCar(true);
   if (mode !== 'walk') setWalk();
   PL.x = t.x; PL.z = t.z; PL.y = groundAt(t.x, t.z); yaw = t.yaw; pitch = 0;
   toast('Teleport: ' + t.name);
 }
 let vrTpIdx = 0;
 function tpVR(i) {
-  const t = TP[i]; if (!t) return;
+  const t = TP[i]; if (!t) return; leaveCar(true);
   rig.rotation.y = t.yaw;
   teleport({ x: t.x, y: groundAt(t.x, t.z), z: t.z });
   toastVR(t.name);
@@ -741,7 +741,7 @@ TP.forEach((t, i) => { const b = document.createElement('button'); b.textContent
 let mode = 'desk';
 const KEYS = {}, PL = { x: SPAWN.x, y: 0, z: SPAWN.z }; let yaw = SPAWN.yaw, pitch = 0, dragging = false;
 const centerRay = new THREE.Raycaster(); centerRay.far = 3;
-addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; KEYS[e.code] = true; if (e.code === 'KeyE' && mode === 'walk') interactCenter();
+addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; KEYS[e.code] = true; if (e.code === 'KeyE' && mode === 'walk') { if (mySeat >= 0) leaveCar(); else interactCenter(); }
   const dg = /^Digit([1-9])$/.exec(e.code); if (dg && !renderer.xr.isPresenting) tpWalk(Number(dg[1]) - 1); });
 addEventListener('keyup', e => { KEYS[e.code] = false; });
 addEventListener('blur', () => { for (const k in KEYS) KEYS[k] = false; });
@@ -769,24 +769,25 @@ function setWalk() {
 }
 function setDesk() {
   if (renderer.xr.isPresenting || mode === 'desk') return;
-  mode = 'desk'; labels.visible = true; $('cross').style.display = 'none'; $('hint').style.display = 'none';
+  leaveCar(true); mode = 'desk'; labels.visible = true; $('cross').style.display = 'none'; $('hint').style.display = 'none';
   if (locked()) document.exitPointerLock();
   camera.position.set(-600, 380, 650); controls.target.set(0, 10, 0); controls.enabled = true; controls.update();
 }
 $('btnWalk').onclick = setWalk; $('btnMap').onclick = setDesk;
 function walkUpdate(dt) {
+  if (mySeat >= 0) { seatCamera(); return; }
   let fx = 0, fz = 0;
   if (KEYS.KeyW || KEYS.ArrowUp) fz += 1; if (KEYS.KeyS || KEYS.ArrowDown) fz -= 1;
   if (KEYS.KeyD || KEYS.ArrowRight) fx += 1; if (KEYS.KeyA || KEYS.ArrowLeft) fx -= 1;
   if (fx || fz) {
-    const L = Math.hypot(fx, fz), sp = (KEYS.ShiftLeft || KEYS.ShiftRight ? 9 : 4) * dt; fx /= L; fz /= L;
+    const L = Math.hypot(fx, fz), sp = (KEYS.ShiftLeft || KEYS.ShiftRight ? 9 : 4) * boost() * dt; fx /= L; fz /= L;
     const nx = PL.x + (-Math.sin(yaw) * fz + Math.cos(yaw) * fx) * sp, nz = PL.z + (-Math.cos(yaw) * fz - Math.sin(yaw) * fx) * sp;
     const r = resolve(PL.x, PL.z, nx, nz); PL.x = r.x; PL.z = r.z;
   }
   PL.y += (groundAt(PL.x, PL.z) - PL.y) * Math.min(1, dt * 15);
   camera.position.set(PL.x, PL.y + 1.65, PL.z); camera.rotation.set(pitch, yaw, 0, 'YXZ');
   const h = centerHit(), hint = $('hint');
-  if (h) { hint.textContent = h.object.userData.a === 'spin' ? '[E] / klik – zakręć' : '[E] / klik – zmień stawkę'; hint.style.display = 'block'; } else hint.style.display = 'none';
+  if (h) { hint.textContent = h.object.userData.hint || (h.object.userData.a === 'spin' ? '[E] / klik – zakręć' : '[E] / klik – zmień stawkę'); hint.style.display = 'block'; } else hint.style.display = 'none';
 }
 
 // ================= VR =================
@@ -800,7 +801,7 @@ function updateSun() {
   renderer.shadowMap.needsUpdate = true;
 }
 function applyMode(m) {
-  mode = m;
+  leaveCar(true); mode = m;
   world.position.set(0, 0, 0); world.rotation.set(0, 0, 0); world.scale.setScalar(1);
   rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0);
   farMesh.visible = true; water.scale.set(1, 1, 1); labels.visible = (m === 'desk' || m === 'table' || m === 'giant');
@@ -876,13 +877,14 @@ function handleInput(dt) {
     if (a && !c.userData.prevA) { const order = ['life', 'table', 'giant']; applyMode(order[(order.indexOf(mode) + 1) % 3]); }
     c.userData.prevA = a;
     const b = !!(gp.buttons[5] && gp.buttons[5].pressed);
-    if (b && !c.userData.prevB) { if (mode !== 'life') applyMode('life'); vrTpIdx = (vrTpIdx + 1) % TP.length; tpVR(vrTpIdx); }
+    if (b && !c.userData.prevB && mySeat >= 0) leaveCar(); else if (b && !c.userData.prevB) { if (mode !== 'life') applyMode('life'); vrTpIdx = (vrTpIdx + 1) % TP.length; tpVR(vrTpIdx); }
     c.userData.prevB = b;
-    if (mode === 'life') {
+    if (mode === 'life' && mySeat >= 0) { if (src.handedness === 'left') { carIn.thr = Math.abs(sy) > 0.15 ? -sy : 0; carIn.steer = Math.abs(sx) > 0.15 ? sx : 0; } }
+    else if (mode === 'life') {
       if (src.handedness === 'left') {
         if (Math.hypot(sx, sy) > 0.15) {
           const head = camera.getWorldPosition(new V3()), dir = camera.getWorldDirection(new V3()); dir.y = 0; dir.normalize();
-          const sp = 3 * dt, nx = head.x + (dir.x * -sy - dir.z * sx) * sp, nz = head.z + (dir.z * -sy + dir.x * sx) * sp;
+          const sp = 3 * boost() * dt, nx = head.x + (dir.x * -sy - dir.z * sx) * sp, nz = head.z + (dir.z * -sy + dir.x * sx) * sp;
           const r = resolve(head.x, head.z, nx, nz); rig.position.x += r.x - head.x; rig.position.z += r.z - head.z;
         }
       } else {
@@ -897,7 +899,7 @@ function handleInput(dt) {
       }
     }
   }
-  if (mode === 'life') { const head = camera.getWorldPosition(new V3()); const gy = groundAt(head.x, head.z); rig.position.y += (gy - rig.position.y) * Math.min(1, dt * 15); }
+  if (mode === 'life' && mySeat < 0) { const head = camera.getWorldPosition(new V3()); const gy = groundAt(head.x, head.z); rig.position.y += (gy - rig.position.y) * Math.min(1, dt * 15); }
   if (vrToast && (vrToastT -= dt) <= 0) { camera.remove(vrToast); vrToast = null; }
   if (moving) shadowDirty = true; else if (shadowDirty) { shadowDirty = false; updateSun(); }
 }
@@ -952,7 +954,7 @@ const r2 = v => Math.round(v * 100) / 100;
 const okVec = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
 function myState() {
   const vis = (renderer.xr.isPresenting && mode === 'life') || (!renderer.xr.isPresenting && mode === 'walk');
-  const msg = { t: 'st', n: myName(), v: vis ? 1 : 0 };
+  const msg = { t: 'st', n: myName(), v: vis ? 1 : 0, s: mySeat };
   if (vis) {
     const h = world.worldToLocal(camera.getWorldPosition(new V3())), d = camera.getWorldDirection(new V3());
     msg.p = [r2(h.x), r2(h.y), r2(h.z)]; msg.y = r2(Math.atan2(-d.x, -d.z));
@@ -967,7 +969,7 @@ function applyNet(d) {
     let a = avatars.get(d.id); if (!a) { a = makeAvatar(d.id, name); avatars.set(d.id, a); }
     if (Number.isFinite(d.ts)) { if (d.ts <= (a.ts || 0)) return; a.ts = d.ts; }
     if (a.name !== name) { a.g.remove(a.tag); a.tag = labelSprite(name, 0.9, 0.2); a.tag.position.y = 0.42; a.g.add(a.tag); a.name = name; }
-    a.last = performance.now(); a.vis = !!d.v && okVec(d.p);
+    a.last = performance.now(); a.vis = !!d.v && okVec(d.p); a.seat = Number.isInteger(d.s) ? d.s : -1;
     if (a.vis) {
       const first = !a.g.visible; a.tgt.set(d.p[0], d.p[1], d.p[2]); if (first) a.g.position.copy(a.tgt);
       if (Number.isFinite(d.y)) a.yaw = d.y;
@@ -979,6 +981,7 @@ function applyNet(d) {
     if (M && Array.isArray(d.s) && d.s.length === 3 && d.s.every(v => Number.isInteger(v) && v >= 0 && v < NSTOP)) {
       const a = avatars.get(d.id); spin(M, { s: d.s, n: a ? a.name : 'Gracz' });
     }
+  } else if (d.t === 'ch' || d.t === 'car' || d.t === 'die') { extraNet(d);
   } else if (d.t === 'leave' && typeof d.id === 'string') removeAvatar(d.id);
 }
 
@@ -1012,6 +1015,249 @@ function netUpdate(dt) {
   netSend(myState());
 }
 
+// ================= mechaniki: komunikaty, ekonomia, auto, goniący, postacie =================
+const playing = () => (renderer.xr.isPresenting && mode === 'life') || (!renderer.xr.isPresenting && mode === 'walk');
+const clampN = THREE.MathUtils.clamp;
+{ const t = $('toast'); t.style.width = 'max-content'; t.style.maxWidth = '86vw'; t.style.textAlign = 'center'; }
+function say(msg) {
+  if (renderer.xr.isPresenting) {
+    if (vrToast) camera.remove(vrToast);
+    const tex = canvasTex(1024, 192, (g) => {
+      g.fillStyle = 'rgba(12,22,32,0.88)'; g.fillRect(0, 0, 1024, 192);
+      g.fillStyle = '#fff'; g.font = '600 34px system-ui,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      const lines = []; let cur = '';
+      for (const w of msg.split(' ')) { if ((cur + ' ' + w).length > 50) { lines.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w; }
+      lines.push(cur); const L = lines.slice(0, 4);
+      L.forEach((l, i) => g.fillText(l, 512, 96 + (i - (L.length - 1) / 2) * 42));
+    });
+    vrToast = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    vrToast.scale.set(1.1, 0.206, 1); vrToast.position.set(0, -0.28, -1.3); vrToast.renderOrder = 12; camera.add(vrToast); vrToastT = 4;
+  } else { toast(msg); clearTimeout(toastT); toastT = setTimeout(() => { $('toast').style.display = 'none'; }, 3500); }
+}
+const flash = document.createElement('div');
+flash.style.cssText = 'position:absolute;inset:0;background:#a00000;opacity:0;pointer-events:none;transition:opacity .6s';
+document.body.appendChild(flash);
+
+// ---------- stan gracza ----------
+let hasKey = store.get('lsj-key') === '1', shields = Number(store.get('lsj-shield')) || 0, boostUntil = 0, carrying = false, invulnUntil = 0;
+let deposit = Number(store.get('lsj-dep')) || 0;
+function boost() { return performance.now() < boostUntil ? 1.6 : 1; }
+function pay(cost) { if (credits < cost) { say(`Za mało kasy – potrzebujesz ${cost}, masz ${credits}.`); return false; } credits -= cost; saveCredits(); drawAll(); return true; }
+function earn(n) { credits += n; saveCredits(); drawAll(); }
+
+// ---------- terminale (jedyny interfejs do pieniędzy) ----------
+const KIOSKS = []; let kioskT = 0;
+function kiosk(x, z, ry, title, statusFn, opts, color = 0x26323d) {
+  const y = groundAt(x, z), g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry; world.add(g);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.0, 0.5), lam(color)); body.position.y = 1.0; g.add(body);
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 256;
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.45), new THREE.MeshBasicMaterial({ map: tex })); scr.position.set(0, 1.72, 0.256); g.add(scr);
+  const K = { draw() {
+    const c = cv.getContext('2d'); c.fillStyle = '#0b0b14'; c.fillRect(0, 0, 512, 256);
+    c.fillStyle = '#ffcc33'; c.font = 'bold 40px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'alphabetic'; c.fillText(title, 256, 52);
+    c.fillStyle = '#7CFC9A'; c.font = 'bold 28px monospace'; c.textAlign = 'left';
+    statusFn().slice(0, 5).forEach((l, i) => c.fillText(l, 24, 104 + i * 36));
+    tex.needsUpdate = true;
+  } };
+  opts.forEach((o, i) => {
+    const bt = canvasTex(512, 80, (c) => { c.fillStyle = '#1e63d6'; c.fillRect(0, 0, 512, 80); c.fillStyle = '#fff'; c.font = 'bold 30px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(o.label, 256, 42); });
+    const b = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.14), new THREE.MeshBasicMaterial({ map: bt }));
+    b.position.set(0, 1.36 - i * 0.17, 0.256); b.userData = { fn: () => { beep(440, 0.04); o.fn(); K.draw(); }, hint: '[E] / klik – ' + o.label }; g.add(b); INTERACT.push(b);
+  });
+  const tag = labelSprite(title, 2.2, 0.48); tag.position.set(x, y + 2.6, z); world.add(tag);
+  COLL.push({ x, z, hw: 0.55, hd: 0.3, rot: ry });
+  KIOSKS.push(K); K.draw(); return K;
+}
+// sklep – kuchnia w rezydencji
+kiosk(S.main.x + 5, S.main.z - 8.4, 0, 'SKLEP',
+  () => [`Kasa: ${credits}`, `Kluczyki: ${hasKey ? 'masz' : 'brak'}`, `Amulety: ${shields}`, `Energetyk: ${performance.now() < boostUntil ? Math.ceil((boostUntil - performance.now()) / 1000) + ' s' : '-'}`],
+  [
+    { label: 'Kluczyki do auta – 300', fn: () => { if (hasKey) { say('Kluczyki już masz.'); return; } if (pay(300)) { hasKey = true; store.set('lsj-key', '1'); say('Kupione. Auto stoi przy przystani.'); } } },
+    { label: 'Energetyk (90 s) – 50', fn: () => { if (pay(50)) { boostUntil = performance.now() + 90000; say('Biegasz szybciej przez 90 sekund.'); } } },
+    { label: 'Amulet ochronny – 150', fn: () => { if (pay(150)) { shields++; store.set('lsj-shield', String(shields)); say('Amulet ocali cię przed jednym dotknięciem.'); } } }
+  ]);
+// bankomat – kino
+const DEP_IN = 200, DEP_OUT = 260, DEP_MS = 300000;
+kiosk(S.library.x + 6, S.library.z + 6.4, Math.PI, 'BANKOMAT',
+  () => [`Saldo: ${credits}`, deposit ? (Date.now() - deposit >= DEP_MS ? `Lokata: ${DEP_OUT} do odbioru` : `Lokata: ${Math.ceil((DEP_MS - (Date.now() - deposit)) / 1000)} s`) : 'Lokata: brak'],
+  [
+    { label: `Lokata: wpłać ${DEP_IN}`, fn: () => { if (deposit) { say('Masz już lokatę.'); return; } if (pay(DEP_IN)) { deposit = Date.now(); store.set('lsj-dep', String(deposit)); say(`Za 5 minut odbierzesz ${DEP_OUT}.`); } } },
+    { label: 'Odbierz lokatę', fn: () => { if (!deposit) { say('Nie masz lokaty.'); return; } if (Date.now() - deposit < DEP_MS) { say('Lokata jeszcze pracuje.'); return; } deposit = 0; store.set('lsj-dep', '0'); earn(DEP_OUT); say(`+${DEP_OUT}`); } }
+  ]);
+// praca: paczki z przystani na zaplecze
+const JOB_PAY = 150;
+kiosk(shoreX + 12, dockZ - 6, 0, 'PRACA: PACZKI', () => [carrying ? 'Masz paczkę' : 'Paczka czeka', 'Cel: zaplecze', `Stawka: ${JOB_PAY}`],
+  [{ label: 'Weź paczkę', fn: () => { if (carrying) { say('Masz już paczkę.'); return; } carrying = true; say('Zawieź paczkę na zaplecze techniczne na wschodzie wyspy.'); } }], 0x6b4a32);
+const DROP = { x: S.util.x + 8.2 * Math.sin(0.2), z: S.util.z + 8.2 * Math.cos(0.2) };
+kiosk(DROP.x, DROP.z, 0.2, 'ODBIÓR PACZEK', () => [carrying ? 'Oddaj paczkę' : 'Brak paczki', `Wypłata: ${JOB_PAY}`],
+  [{ label: 'Oddaj paczkę', fn: () => { if (!carrying) { say('Nie masz paczki – weź ją na przystani.'); return; } carrying = false; earn(JOB_PAY); say(`Dostarczone: +${JOB_PAY}. Stan konta sprawdzisz w bankomacie w kinie.`); } }], 0x6b4a32);
+
+// ---------- postacie (wymyślona obsługa wyspy) ----------
+function npc(name, x, z, color, lines) {
+  const p = safeSpot(x, z), y = groundAt(p.x, p.z), g = new THREE.Group(); g.position.set(p.x, y, p.z); world.add(g);
+  let i = 0; const ud = { fn: () => say(name + ': ' + lines[i++ % lines.length]), hint: '[E] / klik – porozmawiaj' };
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.85, 4, 10), new THREE.MeshLambertMaterial({ color })); body.position.y = 0.67; body.userData = ud; g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 14, 10), lam(0xe0b48a)); head.position.y = 1.5; head.userData = ud; g.add(head);
+  const tag = labelSprite(name, 1.2, 0.26); tag.position.y = 1.95; g.add(tag);
+  INTERACT.push(body, head); COLL.push({ x: p.x, z: p.z, hw: 0.3, hd: 0.3, rot: 0 });
+}
+npc('Kapitan Zenek', shoreX + 10, dockZ + 5, 0x1f3a5f, ['Łódź odpłynie, jak naprawię silnik. Czyli nigdy.', 'Chcesz zarobić? Bierz paczki z terminala obok.', 'Auto stoi przy drodze. Bez kluczyków pojedziesz najwyżej jako pasażer.']);
+npc('Krupierka Wanda', S.temple.x - 3.8, S.temple.z - 1, 0x7a1f6b, ['Automaty oddają 91%. Kasyno zawsze wygrywa.', 'Jak przegrasz wszystko, na przystani czeka uczciwa praca.']);
+npc('Kucharz Bogdan', S.main.x + 15, S.main.z - 5.5, 0xf2f2f2, ['Sklep masz w automacie przy ścianie.', 'Amulet kup. On zawsze kogoś goni.']);
+npc('Ogrodnik Mietek', S.tennis.x + 20, S.tennis.z + 11, 0x3f7a33, ['Słyszysz to buczenie? To znaczy, że jest blisko.', 'Przez ściany przechodzi. Nie chowaj się w budynkach.']);
+npc('Pilot Stefan', S.heli.x - 17, S.heli.z + 3, 0x444b52, ['Helikopter? W serwisie. Od 2019.', 'Bankomat jest w kinie, obok rezydencji.']);
+npc('Ochroniarz Rysiek', DROP.x + 2.6, DROP.z + 0.8, 0x15181c, ['Paczki oddajesz w terminalu. Płacę 150 za sztukę.', 'Autem obrócisz trzy razy szybciej.']);
+
+// ---------- auto (4 miejsca) ----------
+const CAR = { x: shoreX + 24, z: dockZ - 5, yaw: -Math.PI / 2, y: 0, speed: 0, tx: 0, tz: 0, tyaw: 0, ts: 0, mine: false, acc: 0 };
+{ const p = safeSpot(CAR.x, CAR.z); CAR.x = CAR.tx = p.x; CAR.z = CAR.tz = p.z; CAR.tyaw = CAR.yaw; CAR.y = groundAt(CAR.x, CAR.z); }
+const carIn = { thr: 0, steer: 0 }; let mySeat = -1;
+const SEATS = [[-0.45, -0.2], [0.45, -0.2], [-0.45, 0.9], [0.45, 0.9]];
+const carG = new THREE.Group(); world.add(carG);
+{
+  const ud = { fn: enterCar, hint: '[E] / klik – wsiądź' }, paint = lam(0xf2b632), dark = lam(0x1c1c1c);
+  const part = (w, h, d, x, y, z, mat, inter) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); carG.add(m); if (inter) { m.userData = ud; INTERACT.push(m); } return m; };
+  part(1.9, 0.45, 4.1, 0, 0.6, 0, paint, true);
+  part(1.8, 0.28, 1.2, 0, 0.96, -1.4, paint, true); part(1.8, 0.28, 0.5, 0, 0.96, 1.8, paint, true);
+  part(0.1, 0.38, 2.0, -0.9, 1.0, 0.35, paint, true); part(0.1, 0.38, 2.0, 0.9, 1.0, 0.35, paint, true);
+  part(1.8, 0.6, 0.05, 0, 1.4, -0.8, new THREE.MeshLambertMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.35 }));
+  for (const [sx, sz] of SEATS) { part(0.6, 0.14, 0.6, sx, 0.9, sz, dark); part(0.6, 0.5, 0.1, sx, 1.15, sz + 0.3, dark); }
+  for (const wx of [-1, 1]) for (const wz of [-1.35, 1.35]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.3, 12), dark); w.rotation.z = Math.PI / 2; w.position.set(wx, 0.4, wz); carG.add(w); }
+  const sw = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.025, 6, 14), dark); sw.position.set(-0.45, 1.2, -0.72); carG.add(sw);
+  for (const hx of [-0.65, 0.65]) part(0.3, 0.14, 0.05, hx, 0.75, -2.06, basic(0xfff3b0));
+}
+function seatWorld(i) { const [ox, oz] = SEATS[i], cs = Math.cos(CAR.yaw), sn = Math.sin(CAR.yaw); return { x: CAR.x + ox * cs + oz * sn, z: CAR.z - ox * sn + oz * cs }; }
+function seatTaken(i) { const now = performance.now(); for (const a of avatars.values()) if (a.seat === i && now - a.last < 5000) return true; return false; }
+function enterCar() {
+  if (mySeat >= 0 || !playing()) return;
+  let seat = -1;
+  if (hasKey && !seatTaken(0)) seat = 0; else for (let i = 1; i < 4; i++) if (!seatTaken(i)) { seat = i; break; }
+  if (seat < 0) { say('Brak wolnych miejsc.'); return; }
+  mySeat = seat; CAR.speed = 0;
+  if (!renderer.xr.isPresenting) { yaw = CAR.yaw; pitch = 0; }
+  say(seat === 0 ? 'Prowadzisz. Wysiadasz klawiszem E (w VR: B/Y).' : (hasKey ? 'Jedziesz jako pasażer.' : 'Jedziesz jako pasażer. Kluczyki kupisz w sklepie w rezydencji (300).'));
+}
+function leaveCar(silent) {
+  if (mySeat < 0) return;
+  const [ox, oz] = SEATS[mySeat], side = ox < 0 ? -1.9 : 1.9, cs = Math.cos(CAR.yaw), sn = Math.sin(CAR.yaw);
+  mySeat = -1; CAR.speed = 0; $('hint').style.display = 'none';
+  if (silent) return;
+  const p = safeSpot(CAR.x + side * cs + oz * sn, CAR.z - side * sn + oz * cs);
+  if (renderer.xr.isPresenting) teleport({ x: p.x, y: groundAt(p.x, p.z), z: p.z }); else { PL.x = p.x; PL.z = p.z; }
+}
+function seatCamera() {
+  const s = seatWorld(mySeat); PL.x = s.x; PL.z = s.z; PL.y = CAR.y;
+  camera.position.set(s.x, CAR.y + 1.55, s.z); camera.rotation.set(pitch, yaw, 0, 'YXZ');
+  const h = $('hint'); h.textContent = mySeat === 0 ? 'W/S – gaz, A/D – skręt, [E] – wysiądź' : '[E] – wysiądź'; h.style.display = 'block';
+}
+function carUpdate(dt) {
+  const prevYaw = CAR.yaw;
+  if (mySeat >= 0 && !playing()) leaveCar(true);
+  if (mySeat >= 0 && NET.id) { const now = performance.now(); for (const [id, a] of avatars) if (a.seat === mySeat && now - a.last < 5000 && id < NET.id) { leaveCar(); say('To miejsce jest zajęte.'); break; } }
+  if (mySeat === 0) {
+    let thr, st;
+    if (renderer.xr.isPresenting) { thr = carIn.thr; st = carIn.steer; }
+    else { thr = ((KEYS.KeyW || KEYS.ArrowUp) ? 1 : 0) - ((KEYS.KeyS || KEYS.ArrowDown) ? 1 : 0); st = ((KEYS.KeyD || KEYS.ArrowRight) ? 1 : 0) - ((KEYS.KeyA || KEYS.ArrowLeft) ? 1 : 0); }
+    if (Math.abs(thr) > 0.05) CAR.speed += thr * (thr * CAR.speed < 0 ? 18 : 8) * dt; else CAR.speed -= Math.sign(CAR.speed) * Math.min(Math.abs(CAR.speed), 5 * dt);
+    CAR.speed = clampN(CAR.speed, -5, 16);
+    CAR.yaw -= st * 1.5 * clampN(CAR.speed / 5, -1, 1) * dt;
+    const p = { x: CAR.x - Math.sin(CAR.yaw) * CAR.speed * dt, z: CAR.z - Math.cos(CAR.yaw) * CAR.speed * dt };
+    let hit = false;
+    for (const c of COLL) if (Math.abs(p.x - c.x) < c.hw + c.hd + 2 && Math.abs(p.z - c.z) < c.hw + c.hd + 2) hit = pushRect(p, c, 1.1) || hit;
+    if (groundAt(p.x, p.z) < WATER_LIMIT) CAR.speed = 0; else { CAR.x = p.x; CAR.z = p.z; if (hit) CAR.speed *= 0.85; }
+    CAR.mine = true;
+  } else if (!CAR.mine) {
+    const k = 1 - Math.exp(-dt * 10);
+    if (Math.hypot(CAR.tx - CAR.x, CAR.tz - CAR.z) > 25) { CAR.x = CAR.tx; CAR.z = CAR.tz; CAR.yaw = CAR.tyaw; }
+    else { CAR.x += (CAR.tx - CAR.x) * k; CAR.z += (CAR.tz - CAR.z) * k; let dy = CAR.tyaw - CAR.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); CAR.yaw += dy * k; }
+  }
+  carIn.thr = carIn.steer = 0;
+  CAR.acc += dt;
+  if (CAR.mine && NET.id && CAR.acc >= (mySeat === 0 ? 1 / 12 : 2)) { CAR.acc = 0; CAR.ts = Date.now() + 1; netSend({ t: 'car', p: [r2(CAR.x), r2(CAR.z)], y: r2(CAR.yaw) }); }
+  CAR.y += (groundAt(CAR.x, CAR.z) - CAR.y) * Math.min(1, dt * 10);
+  carG.position.set(CAR.x, CAR.y, CAR.z); carG.rotation.y = CAR.yaw;
+  if (mySeat >= 0) {
+    let d = CAR.yaw - prevYaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+    if (renderer.xr.isPresenting) {
+      if (mySeat === 0 && d) snapTurn(d);
+      const s = seatWorld(mySeat), head = camera.getWorldPosition(new V3());
+      rig.position.x += s.x - head.x; rig.position.z += s.z - head.z; rig.position.y = CAR.y + 0.1;
+    } else yaw += d;
+  }
+}
+
+// ---------- goniący ----------
+const CH = { x: S.tennis.x, z: S.tennis.z, tx: S.tennis.x, tz: S.tennis.z, acc: 0, beepT: 0 };
+const chMat = new THREE.SpriteMaterial({ transparent: true, map: canvasTex(256, 352, (g) => {
+  g.clearRect(0, 0, 256, 352);
+  g.fillStyle = '#d9d2c6'; g.beginPath(); g.ellipse(128, 176, 104, 150, 0, 0, 7); g.fill();
+  g.fillStyle = '#000'; g.beginPath(); g.ellipse(84, 140, 26, 36, 0, 0, 7); g.fill(); g.beginPath(); g.ellipse(172, 140, 26, 36, 0, 0, 7); g.fill();
+  g.fillStyle = '#c00'; g.beginPath(); g.arc(84, 146, 7, 0, 7); g.fill(); g.beginPath(); g.arc(172, 146, 7, 0, 7); g.fill();
+  g.fillStyle = '#000'; g.beginPath(); g.moveTo(52, 228); g.quadraticCurveTo(128, 320, 204, 228); g.quadraticCurveTo(128, 262, 52, 228); g.fill();
+  g.strokeStyle = '#d9d2c6'; g.lineWidth = 3; for (let x = 72; x < 190; x += 16) { g.beginPath(); g.moveTo(x, 236); g.lineTo(x, 290); g.stroke(); }
+}) });
+const chSprite = new THREE.Sprite(chMat); chSprite.scale.set(1.7, 2.34, 1); world.add(chSprite);
+// własna grafika: plik chaser.png w repozytorium zastępuje rysowaną twarz
+new THREE.TextureLoader().load('chaser.png', (t) => { t.colorSpace = THREE.SRGBColorSpace; chMat.map = t; chMat.needsUpdate = true; }, undefined, () => { });
+function isAuth() { if (!NET.id) return true; const now = performance.now(); for (const [id, a] of avatars) if (now - a.last < 5000 && id < NET.id) return false; return true; }
+function relocateChaser() {
+  const pts = []; const now = performance.now();
+  if (playing()) { const m = world.worldToLocal(camera.getWorldPosition(new V3())); pts.push(m); }
+  for (const a of avatars.values()) if (a.vis && now - a.last < 5000) pts.push(a.g.position);
+  for (let t = 0; t < 80; t++) {
+    const x = -340 + Math.random() * 640, z = -200 + Math.random() * 400;
+    if (hLSJ(x, z) < 2) continue;
+    if (pts.every(p => Math.hypot(p.x - x, p.z - z) > 150)) { CH.x = CH.tx = x; CH.z = CH.tz = z; return; }
+  }
+  CH.x = CH.tx = S.tennis.x; CH.z = CH.tz = S.tennis.z;
+}
+function die() {
+  leaveCar(true); carrying = false; invulnUntil = performance.now() + 6000;
+  const y = groundAt(SPAWN.x, SPAWN.z);
+  if (renderer.xr.isPresenting) { rig.rotation.y = SPAWN.yaw; teleport({ x: SPAWN.x, y, z: SPAWN.z }); }
+  else { PL.x = SPAWN.x; PL.z = SPAWN.z; PL.y = y; yaw = SPAWN.yaw; pitch = 0; }
+  flash.style.transition = 'none'; flash.style.opacity = '0.75'; setTimeout(() => { flash.style.transition = 'opacity .8s'; flash.style.opacity = '0'; }, 60);
+  [180, 140, 100, 70].forEach((f, i) => setTimeout(() => beep(f, 0.2, 0.08), i * 130));
+  say('Dopadł cię. Odradzasz się na przystani.');
+  KIOSKS.forEach(k => k.draw());
+}
+function chaserUpdate(dt, now) {
+  const me = playing() ? world.worldToLocal(camera.getWorldPosition(new V3())) : null;
+  if (isAuth()) {
+    let best = null, bd = Infinity;
+    const consider = (x, z) => { const d = Math.hypot(x - CH.x, z - CH.z); if (d < bd) { bd = d; best = { x, z }; } };
+    if (me && now > invulnUntil) consider(me.x, me.z);
+    for (const a of avatars.values()) if (a.vis && now - a.last < 5000) consider(a.g.position.x, a.g.position.z);
+    if (best && bd > 0.3) { const k = Math.min(1, 2.4 * dt / bd); CH.x += (best.x - CH.x) * k; CH.z += (best.z - CH.z) * k; }
+    CH.acc += dt; if (NET.id && CH.acc > 0.2) { CH.acc = 0; netSend({ t: 'ch', p: [r2(CH.x), r2(CH.z)] }); }
+  } else {
+    if (Math.hypot(CH.tx - CH.x, CH.tz - CH.z) > 30) { CH.x = CH.tx; CH.z = CH.tz; }
+    else { const k = 1 - Math.exp(-dt * 6); CH.x += (CH.tx - CH.x) * k; CH.z += (CH.tz - CH.z) * k; }
+  }
+  chSprite.position.set(CH.x, Math.max(groundAt(CH.x, CH.z), 0) + 1.25, CH.z);
+  if (!me) return;
+  const d = Math.hypot(me.x - CH.x, me.z - CH.z);
+  if (d < 35) { CH.beepT -= dt; if (CH.beepT <= 0) { beep(60 + (35 - d) * 2, 0.18, 0.02 + 0.08 * (1 - d / 35)); CH.beepT = 0.2 + d / 35; } }
+  if (d < 1.3 && now > invulnUntil) {
+    if (shields > 0) { shields--; store.set('lsj-shield', String(shields)); invulnUntil = now + 4000; say('Amulet cię ocalił. Zostało: ' + shields); }
+    else die();
+    if (isAuth()) relocateChaser(); else netSend({ t: 'die' });
+  }
+}
+function extraNet(d) {
+  if (d.t === 'ch') { if (Array.isArray(d.p) && d.p.length === 2 && d.p.every(Number.isFinite)) { CH.tx = d.p[0]; CH.tz = d.p[1]; } }
+  else if (d.t === 'die') { if (isAuth()) relocateChaser(); }
+  else if (d.t === 'car') {
+    if (mySeat === 0 || !Array.isArray(d.p) || d.p.length !== 2 || !d.p.every(Number.isFinite) || !Number.isFinite(d.y) || !Number.isFinite(d.ts) || d.ts <= CAR.ts) return;
+    CAR.ts = d.ts; CAR.tx = d.p[0]; CAR.tz = d.p[1]; CAR.tyaw = d.y; CAR.mine = false;
+  }
+}
+function gameUpdate(dt) {
+  carUpdate(dt); chaserUpdate(dt, performance.now());
+  kioskT += dt; if (kioskT > 1) { kioskT = 0; KIOSKS.forEach(k => k.draw()); }
+}
+
 // ================= pętla =================
 updateSun();
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
@@ -1019,6 +1265,7 @@ const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
   waterMat.uniforms.t.value += dt;
+  gameUpdate(dt);
   if (renderer.xr.isPresenting) { handleInput(dt); aimUpdate(); }
   else if (mode === 'walk') walkUpdate(dt);
   else { flyUpdate(dt); controls.update(); }
