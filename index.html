@@ -73,6 +73,7 @@
     <kbd>A</kbd> – skok, <kbd>X</kbd> – tryb: 1:1 → makieta → olbrzym; spust w aucie – klakson; (w makiecie gałka obraca i skaluje)</p>
     <p><b>Auto:</b> podejdź i <kbd>E</kbd>/spust. <kbd>W</kbd><kbd>S</kbd> gaz, <kbd>A</kbd><kbd>D</kbd> skręt, <kbd>E</kbd> wysiądź. VR: lewa gałka, <kbd>B</kbd>/<kbd>Y</kbd> wysiądź.</p>
     <p><b>Nowe:</b> <kbd>G</kbd> (VR: grip) – rzuć banana, przytrzymaj <kbd>Spację</kbd> (VR: <kbd>A</kbd>) – jetpack, helikopter: <kbd>Spacja</kbd> w górę, <kbd>C</kbd> w dół (VR: prawa gałka). Noc zapada co 10 minut.</p>
+    <p><b>Przetrwanie:</b> <kbd>Shift</kbd> (VR: wciśnij lewą gałkę) – sprint, zużywa kondycję. <kbd>F</kbd> – latarka, <kbd>T</kbd> (VR: wciśnij prawą gałkę) – flara. Teleporty ma tylko administrator.</p>
   </details>
   <p class="note">Rekonstrukcja poglądowa: teren generowany proceduralnie, budynki rozmieszczone w przybliżeniu wg publicznych opisów i zdjęć lotniczych. Wnętrza i kasyno są wymyślone. Postacie są fikcyjne. Automaty grają na wirtualne żetony.</p>
 </div>
@@ -95,7 +96,12 @@ const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a
 function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const rand = rng(1998);
 const V3 = THREE.Vector3;
-const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) { } } };
+const GAME_MODE = (() => { try { return localStorage.getItem('lsj-mode') === 'free' ? 'free' : 'story'; } catch (e) { return 'story'; } })(), STORY = GAME_MODE === 'story';
+const memStore = new Map(), KEEP = new Set(['lsj-nick', 'lsj-mode']);
+const store = {
+  get(k) { if (STORY && !KEEP.has(k)) return memStore.has(k) ? memStore.get(k) : null; try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { if (STORY && !KEEP.has(k)) { memStore.set(k, v); return; } try { localStorage.setItem(k, v); } catch (e) { } }
+};
 
 // ================= geografia (1 j. = 1 m, x = wschód, -z = północ) =================
 const LSJ  = { x: 0, z: 0, a: 390, b: 235, rot: -0.18, rough: 0.25, f: 0.006, seed: 3.1, h: 28, depth: 28 };
@@ -167,21 +173,27 @@ function pushRect(p, c, r) {
   p.x = c.x + nx * cs + nz * sn; p.z = c.z - nx * sn + nz * cs;
   return true;
 }
-function groundAt(x, z) {
+function groundAt(x, z, py = -Infinity) {
   let y = -Infinity;
-  for (const f of FLOORS) if (x >= f.x0 && x <= f.x1 && z >= f.z0 && z <= f.z1 && f.y > y) y = f.y;
+  for (const f of FLOORS) if (x >= f.x0 && x <= f.x1 && z >= f.z0 && z <= f.z1) { const sf = (f.top !== undefined && py >= f.top - 0.6) ? f.top + 0.3 : f.y; if (sf > y) y = sf; }
   return y > -Infinity ? y : hNear(x, z);
 }
+function ceilAt(x, z, py) { for (const f of FLOORS) if (f.top !== undefined && x >= f.x0 && x <= f.x1 && z >= f.z0 && z <= f.z1 && py < f.top - 0.6) return f.top; return Infinity; }
 const WATER_LIMIT = -0.6, PR = 0.3;
-function resolve(fx, fz, tx, tz) {
+function resolve1(fx, fz, tx, tz) {
   const p = { x: tx, z: tz };
-  for (let it = 0; it < 2; it++) for (const c of COLL) if (Math.abs(p.x - c.x) < c.hw + c.hd + 1 && Math.abs(p.z - c.z) < c.hw + c.hd + 1) pushRect(p, c, PR);
+  for (let it = 0; it < 3; it++) for (const c of COLL) if (Math.abs(p.x - c.x) < c.hw + c.hd + 1 && Math.abs(p.z - c.z) < c.hw + c.hd + 1) pushRect(p, c, PR);
   if (groundAt(p.x, p.z) < WATER_LIMIT) {
     if (groundAt(p.x, fz) >= WATER_LIMIT) return { x: p.x, z: fz };
     if (groundAt(fx, p.z) >= WATER_LIMIT) return { x: fx, z: p.z };
     return { x: fx, z: fz };
   }
   return p;
+}
+function resolve(fx, fz, tx, tz) {
+  const n = Math.min(60, Math.max(1, Math.ceil(Math.hypot(tx - fx, tz - fz) / 0.15))), sx = (tx - fx) / n, sz = (tz - fz) / n; let cx = fx, cz = fz;
+  for (let i = 0; i < n; i++) { const r = resolve1(cx, cz, cx + sx, cz + sz); cx = r.x; cz = r.z; }
+  return { x: cx, z: cz };
 }
 function blocked(x, z) { const p = { x, z }; for (const c of COLL) if (pushRect(p, c, 0.2)) return true; return false; }
 
@@ -201,7 +213,7 @@ const HORIZON = new THREE.Color(0xcfe6f5), ZENITH = new THREE.Color(0x3b7bd4);
 const scene = new THREE.Scene();
 scene.background = HORIZON.clone();
 scene.fog = new THREE.Fog(HORIZON, 1200, 9000);
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.05, 30000);
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 30000);
 camera.position.set(-600, 380, 650);
 const rig = new THREE.Group(); rig.add(camera); scene.add(rig);
 const world = new THREE.Group(); scene.add(world);
@@ -264,12 +276,12 @@ const waterGeo = new THREE.PlaneGeometry(WATER, WATER); waterGeo.rotateX(-Math.P
 const waterMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false,
   uniforms: {
-    t: { value: 0 }, sunDir: { value: SUN }, shallowC: { value: new THREE.Color(0x1d8fa6) }, skyC: { value: new THREE.Color(0xa9cde8) },
+    t: { value: 0 }, hmap: { value: null }, wsc: { value: new THREE.Vector2(1, 1) }, sunDir: { value: SUN }, shallowC: { value: new THREE.Color(0x1d8fa6) }, skyC: { value: new THREE.Color(0xa9cde8) },
     fogC: { value: HORIZON }, fogN: { value: 1200 }, fogF: { value: 9000 }
   },
-  vertexShader: `varying vec3 vW; varying vec2 vL;
-    void main(){ vL=position.xz; vec4 w=modelMatrix*vec4(position,1.); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`,
-  fragmentShader: `uniform float t; uniform vec3 sunDir; uniform vec3 shallowC; uniform vec3 skyC; uniform vec3 fogC; uniform float fogN; uniform float fogF;
+  vertexShader: `uniform vec2 wsc; varying vec3 vW; varying vec2 vL;
+    void main(){ vL=position.xz*wsc; vec4 w=modelMatrix*vec4(position,1.); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`,
+  fragmentShader: `uniform sampler2D hmap; uniform float t; uniform vec3 sunDir; uniform vec3 shallowC; uniform vec3 skyC; uniform vec3 fogC; uniform float fogN; uniform float fogF;
     varying vec3 vW; varying vec2 vL;
     void main(){
       vec2 p=vL;
@@ -283,7 +295,12 @@ const waterMat = new THREE.ShaderMaterial({
       vec3 col=mix(shallowC,skyC,f*0.9)+spec;
       float a=clamp(mix(0.45,0.95,f)+spec,0.,1.);
       float fg=smoothstep(fogN,fogF,length(cameraPosition-vW));
-      gl_FragColor=vec4(mix(col,fogC,fg),mix(a,1.,fg));
+      vec2 uv=(vL-vec2(-1400.,-1400.))/vec2(2100.,2000.);
+      float hh=(uv.x<0.||uv.x>1.||uv.y<0.||uv.y>1.)?-4.:texture2D(hmap,uv).r*8.-4.;
+      float shore=1.-smoothstep(-0.6,0.0,hh);
+      float foam=smoothstep(-0.8,-0.15,hh)*(0.55+0.45*sin(t*1.6+hh*16.+p.x*0.3));
+      col=mix(col,vec3(0.3,0.8,0.75),smoothstep(-2.5,-0.2,hh)*0.4)+foam*0.25*(0.3+0.7*skyC.b);
+      gl_FragColor=vec4(mix(col,fogC,fg),mix(a,1.,fg)*shore);
       #include <colorspace_fragment>
     }`
 });
@@ -340,7 +357,7 @@ function hollow(o) {
   const fy = gmax + 0.4; // 15 cm nad placami (0.25), żeby powierzchnie się nie nakładały
   const floor = new THREE.Mesh(new THREE.BoxGeometry(o.w, 3, o.d), lam(o.floor)); floor.position.set(o.x, fy - 1.5, o.z);
   world.add(floor); teleportables.push(floor);
-  FLOORS.push({ x0: o.x - hw, x1: o.x + hw, z0: o.z - hd, z1: o.z + hd, y: fy });
+  FLOORS.push({ x0: o.x - hw, x1: o.x + hw, z0: o.z - hd, z1: o.z + hd, y: fy, top: fy + H });
   const wm = o.wallMat || lam(o.wall);
   const seg = (cx, cz, w, d) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, H + 3, d), wm); m.position.set(cx, fy + H / 2 - 1.5, cz); m.castShadow = true; world.add(m); COLL.push({ x: cx, z: cz, hw: w / 2, hd: d / 2, rot: 0 }); };
   const dz = o.door === 'n' ? -1 : 1, fz = o.z + dz * (hd - t / 2), sw = (o.w - o.doorW) / 2;
@@ -457,7 +474,7 @@ function payout(a, b, c) { if (a === b && b === c) return PAY3[a]; if (a === 'C'
 let RTP = 0; for (const a of STRIP) for (const b of STRIP) for (const c of STRIP) RTP += payout(a, b, c); RTP /= NSTOP ** 3;
 const BETS = [1, 5, 10, 25];
 const randStop = () => crypto.getRandomValues(new Uint32Array(1))[0] % NSTOP; // 2^32 dzieli się przez 16 – brak obciążenia
-const savedCr = store.get('lsj-credits'); let credits = savedCr === null ? 300 : Number(savedCr); if (!Number.isFinite(credits) || credits < 0) credits = 300;
+const savedCr = store.get('lsj-credits'); let credits = savedCr === null ? (STORY ? 60 : 200) : Number(savedCr); if (!Number.isFinite(credits) || credits < 0) credits = 200;
 const saveCredits = () => store.set('lsj-credits', String(credits));
 
 function drawSym(g, s, cx, cy, sz) {
@@ -724,14 +741,14 @@ function toastVR(msg) {
   vrToast = labelSprite(msg, 0.6, 0.13); vrToast.position.set(0, -0.22, -1); camera.add(vrToast); vrToastT = 2;
 }
 function tpWalk(i) {
-  const t = TP[i]; if (!t) return; leaveCar(true);
+  const t = TP[i]; if (!t) return; if (!isAdmin()) { say('Teleporty ma tylko administrator.'); return; } leaveCar(true);
   if (mode !== 'walk') setWalk();
   PL.x = t.x; PL.z = t.z; PL.y = groundAt(t.x, t.z); yaw = t.yaw; pitch = 0; PL.vy = PL.hx = PL.hz = 0;
   toast('Teleport: ' + t.name);
 }
 let vrTpIdx = 0;
 function tpVR(i) {
-  const t = TP[i]; if (!t) return; leaveCar(true);
+  const t = TP[i]; if (!t) return; if (!isAdmin()) { say('Teleporty ma tylko administrator.'); return; } leaveCar(true);
   rig.rotation.y = t.yaw;
   teleport({ x: t.x, y: groundAt(t.x, t.z), z: t.z });
   toastVR(t.name);
@@ -741,7 +758,7 @@ TP.forEach((t, i) => { const b = document.createElement('button'); b.textContent
 // ================= tryb spaceru (komputer) =================
 let mode = 'desk';
 const KEYS = {}, PL = { x: SPAWN.x, y: 0, z: SPAWN.z, vy: 0, hx: 0, hz: 0, wet: false }; let yaw = SPAWN.yaw, pitch = 0, dragging = false;
-const centerRay = new THREE.Raycaster(); centerRay.far = 3;
+const centerRay = new THREE.Raycaster(); centerRay.far = 4.5;
 addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; KEYS[e.code] = true; if (e.code === 'KeyE' && mode === 'walk') { if (mySeat >= 0) leaveCar(); else interactCenter(); }
   const dg = /^Digit([1-9])$/.exec(e.code); if (dg && !renderer.xr.isPresenting) tpWalk(Number(dg[1]) - 1); });
 addEventListener('keyup', e => { KEYS[e.code] = false; });
@@ -776,18 +793,18 @@ function setDesk() {
 }
 $('btnWalk').onclick = setWalk; $('btnMap').onclick = setDesk;
 function walkUpdate(dt) {
-  if (performance.now() < deadUntil) { deathCam(); return; }
+  if (deadUntil) { deathCam(); return; }
   if (mySeat >= 0) { seatCamera(); return; }
   let fx = 0, fz = 0;
   if (KEYS.KeyW || KEYS.ArrowUp) fz += 1; if (KEYS.KeyS || KEYS.ArrowDown) fz -= 1;
   if (KEYS.KeyD || KEYS.ArrowRight) fx += 1; if (KEYS.KeyA || KEYS.ArrowLeft) fx -= 1;
   if (PL.hx || PL.hz) { const nx = PL.x + PL.hx * dt, nz = PL.z + PL.hz * dt; if (PL.y - groundAt(PL.x, PL.z) < 2.5 && PL.vy < 8) { const r = resolve(PL.x, PL.z, nx, nz); PL.x = r.x; PL.z = r.z; } else { PL.x = nx; PL.z = nz; } }
   else if (fx || fz) {
-    const L = Math.hypot(fx, fz), sp = (KEYS.ShiftLeft || KEYS.ShiftRight ? 9 : 4) * boost() * dt; fx /= L; fz /= L;
+    const L = Math.hypot(fx, fz), sp = moveSpeed(!!(KEYS.ShiftLeft || KEYS.ShiftRight), dt, 4, 7.5) * dt; fx /= L; fz /= L;
     const nx = PL.x + (-Math.sin(yaw) * fz + Math.cos(yaw) * fx) * sp, nz = PL.z + (-Math.cos(yaw) * fz - Math.sin(yaw) * fx) * sp;
     const r = resolve(PL.x, PL.z, nx, nz); PL.x = r.x; PL.z = r.z;
   }
-  { const gy = groundAt(PL.x, PL.z); trampCheck(PL, PL.x, PL.z); jetThrust(PL, !!KEYS.Space, dt); physY(PL, gy, dt);
+  { const gy = groundAt(PL.x, PL.z, PL.y); trampCheck(PL, PL.x, PL.z); jetThrust(PL, !!KEYS.Space, dt); physY(PL, gy, dt); { const cc = ceilAt(PL.x, PL.z, PL.y); if (PL.y + 1.8 > cc) { PL.y = cc - 1.8; if (PL.vy > 0) PL.vy = 0; } }
     if (PL.wet) { PL.wet = false; PL.x = CANNON.x + 2; PL.z = CANNON.z + 2; PL.y = groundAt(PL.x, PL.z); say('Plusk! Wracasz pod armatę.'); } }
   camera.position.set(PL.x, PL.y + 1.65, PL.z); camera.rotation.set(pitch, yaw, 0, 'YXZ');
   const h = centerHit(), hint = $('hint');
@@ -835,7 +852,7 @@ const ctrls = [], raycaster = new THREE.Raycaster(), iray = new THREE.Raycaster(
 raycaster.far = 2500;
 function ctrlRay(c, rc) { tmpM.identity().extractRotation(c.matrixWorld); rc.ray.origin.setFromMatrixPosition(c.matrixWorld); rc.ray.direction.set(0, 0, -1).applyMatrix4(tmpM); }
 function tryInteract(c) {
-  ctrlRay(c, iray); iray.far = mode === 'life' ? 4 : 100;
+  ctrlRay(c, iray); iray.far = mode === 'life' ? 5 : 100;
   const h = iray.intersectObjects(INTERACT, false)[0];
   if (h) { doAction(h.object.userData); return true; }
   return false;
@@ -884,12 +901,13 @@ function handleInput(dt) {
     const b = !!(gp.buttons[5] && gp.buttons[5].pressed);
     if (b && !c.userData.prevB && mySeat >= 0) leaveCar(); else if (b && !c.userData.prevB) { if (mode !== 'life') applyMode('life'); vrTpIdx = (vrTpIdx + 1) % TP.length; tpVR(vrTpIdx); }
     c.userData.prevB = b;
+    const sc = !!(gp.buttons[3] && gp.buttons[3].pressed); if (sc && !c.userData.prevS && src.handedness === 'right' && mode === 'life') throwFlare(); c.userData.prevS = sc;
     if (mode === 'life' && mySeat >= 0) { if (src.handedness === 'left') { carIn.thr = Math.abs(sy) > 0.15 ? -sy : 0; carIn.steer = Math.abs(sx) > 0.15 ? sx : 0; } else carIn.lift = Math.abs(sy) > 0.15 ? -sy : 0; }
     else if (mode === 'life') {
       if (src.handedness === 'left') {
         if (Math.hypot(sx, sy) > 0.15) {
           const head = camera.getWorldPosition(new V3()), dir = camera.getWorldDirection(new V3()); dir.y = 0; dir.normalize();
-          const sp = 3 * boost() * dt, nx = head.x + (dir.x * -sy - dir.z * sx) * sp, nz = head.z + (dir.z * -sy + dir.x * sx) * sp;
+          const sp = moveSpeed(!!(gp.buttons[3] && gp.buttons[3].pressed), dt, 4, 7.5) * dt, nx = head.x + (dir.x * -sy - dir.z * sx) * sp, nz = head.z + (dir.z * -sy + dir.x * sx) * sp;
           const r = resolve(head.x, head.z, nx, nz); rig.position.x += r.x - head.x; rig.position.z += r.z - head.z;
         }
       } else {
@@ -904,10 +922,10 @@ function handleInput(dt) {
       }
     }
   }
-  if (mode === 'life' && mySeat < 0) {
+  if (mode === 'life' && mySeat < 0 && playing()) {
     if (VRP.hx || VRP.hz) { const h0 = camera.getWorldPosition(new V3()); let nx = h0.x + VRP.hx * dt, nz = h0.z + VRP.hz * dt; if (rig.position.y - groundAt(h0.x, h0.z) < 2.5 && VRP.vy < 8) { const r = resolve(h0.x, h0.z, nx, nz); nx = r.x; nz = r.z; } rig.position.x += nx - h0.x; rig.position.z += nz - h0.z; }
-    const head = camera.getWorldPosition(new V3()); const gy = groundAt(head.x, head.z);
-    VRP.y = rig.position.y; trampCheck(VRP, head.x, head.z); jetThrust(VRP, vrJetHeld, dt); physY(VRP, gy, dt); rig.position.y = VRP.y;
+    const head = camera.getWorldPosition(new V3()); const gy = groundAt(head.x, head.z, rig.position.y);
+    VRP.y = rig.position.y; trampCheck(VRP, head.x, head.z); jetThrust(VRP, vrJetHeld, dt); physY(VRP, gy, dt); rig.position.y = VRP.y; { const cc = ceilAt(head.x, head.z, rig.position.y); if (rig.position.y + 1.8 > cc) { rig.position.y = VRP.y = cc - 1.8; if (VRP.vy > 0) VRP.vy = 0; } }
     if (VRP.wet) { VRP.wet = false; teleport({ x: CANNON.x + 2, y: groundAt(CANNON.x + 2, CANNON.z + 2), z: CANNON.z + 2 }); say('Plusk! Wracasz pod armatę.'); }
   }
   if (vrToast && (vrToastT -= dt) <= 0) { camera.remove(vrToast); vrToast = null; }
@@ -938,7 +956,7 @@ function joinCode(code) {
   if (!window.mqtt) { netStatus('Nie wczytano biblioteki MQTT – sprawdź internet i odśwież stronę.'); return; }
   netReset();
   const myId = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
-  const topic = 'lsjvr2026/room/' + code;
+  const topic = 'lsjvr2026/room/' + code + '/' + GAME_MODE;
   NET.code = code; NET.id = myId; NET.topic = topic;
   netStatus(`Pokój: ${code} · łączę z serwerem…`);
   BROKERS.forEach((url, i) => {
@@ -963,8 +981,8 @@ function netSend(msg) {
 const r2 = v => Math.round(v * 100) / 100;
 const okVec = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
 function myState() {
-  const vis = ((renderer.xr.isPresenting && mode === 'life') || (!renderer.xr.isPresenting && mode === 'walk')) && performance.now() > deadUntil;
-  const msg = { t: 'st', n: myName(), v: vis ? 1 : 0, s: mySeat, vh: myVeh, hd: hiding ? 1 : 0 };
+  const vis = ((renderer.xr.isPresenting && mode === 'life') || (!renderer.xr.isPresenting && mode === 'walk')) && !deadUntil && !gameWon;
+  const msg = { t: 'st', n: myName(), v: vis ? 1 : 0, s: mySeat, vh: myVeh, hd: hiding ? 1 : 0, gs: delivered };
   if (vis) {
     const h = world.worldToLocal(camera.getWorldPosition(new V3())), d = camera.getWorldDirection(new V3());
     msg.p = [r2(h.x), r2(h.y), r2(h.z)]; msg.y = r2(Math.atan2(-d.x, -d.z));
@@ -979,7 +997,7 @@ function applyNet(d) {
     let a = avatars.get(d.id); if (!a) { a = makeAvatar(d.id, name); avatars.set(d.id, a); }
     if (Number.isFinite(d.ts)) { if (d.ts <= (a.ts || 0)) return; a.ts = d.ts; }
     if (a.name !== name) { a.g.remove(a.tag); a.tag = labelSprite(name, 0.9, 0.2); a.tag.position.y = 0.42; a.g.add(a.tag); a.name = name; }
-    a.last = performance.now(); a.vis = !!d.v && okVec(d.p); a.seat = Number.isInteger(d.s) ? d.s : -1; a.veh = Number.isInteger(d.vh) ? d.vh : -1; a.hid = !!d.hd;
+    a.last = performance.now(); a.vis = !!d.v && okVec(d.p); a.seat = Number.isInteger(d.s) ? d.s : -1; a.veh = Number.isInteger(d.vh) ? d.vh : -1; a.hid = !!d.hd; if (STORY && Number.isInteger(d.gs) && d.gs >= 0 && d.gs <= ALL_PARTS) delivered |= d.gs;
     if (a.vis) {
       const first = !a.g.visible; a.tgt.set(d.p[0], d.p[1], d.p[2]); if (first) a.g.position.copy(a.tgt);
       if (Number.isFinite(d.y)) a.yaw = d.y;
@@ -1026,7 +1044,8 @@ function netUpdate(dt) {
 }
 
 // ================= mechaniki: komunikaty, ekonomia, auto, goniący, postacie =================
-const playing = () => (renderer.xr.isPresenting && mode === 'life') || (!renderer.xr.isPresenting && mode === 'walk');
+let eliminated = false, gameWon = false, deadUntil = 0;
+const playing = () => ((renderer.xr.isPresenting && mode === 'life') || (!renderer.xr.isPresenting && mode === 'walk')) && !deadUntil && !eliminated && !gameWon;
 const clampN = THREE.MathUtils.clamp;
 { const t = $('toast'); t.style.width = 'max-content'; t.style.maxWidth = '86vw'; t.style.textAlign = 'center'; }
 function say(msg) {
@@ -1083,9 +1102,9 @@ function kiosk(x, z, ry, title, statusFn, opts, color = 0x26323d) {
 kiosk(S.main.x + 5, S.main.z - 8.4, 0, 'SKLEP',
   () => [`Kasa: ${credits}`, `Kluczyki: ${hasKey ? 'masz' : 'brak'}`, `Amulety: ${shields}`, `Energetyk: ${performance.now() < boostUntil ? Math.ceil((boostUntil - performance.now()) / 1000) + ' s' : '-'}`],
   [
-    { label: 'Kluczyki do auta – 300', fn: () => { if (hasKey) { say('Kluczyki już masz.'); return; } if (pay(300)) { hasKey = true; store.set('lsj-key', '1'); say('Kupione. Auto stoi przy przystani.'); } } },
-    { label: 'Energetyk (90 s) – 50', fn: () => { if (pay(50)) { boostUntil = performance.now() + 90000; say('Biegasz szybciej przez 90 sekund.'); } } },
-    { label: 'Amulet ochronny – 150', fn: () => { if (pay(150)) { shields++; store.set('lsj-shield', String(shields)); say('Amulet ocali cię przed jednym dotknięciem.'); } } }
+    { label: 'Kluczyki do auta – 450', fn: () => { if (hasKey) { say('Kluczyki już masz.'); return; } if (pay(450)) { hasKey = true; store.set('lsj-key', '1'); say('Kupione. Auto stoi przy przystani.'); } } },
+    { label: 'Energetyk (90 s) – 80', fn: () => { if (pay(80)) { boostUntil = performance.now() + 90000; say('Przez 90 sekund biegasz szybciej i nie tracisz kondycji.'); } } },
+    { label: 'Amulet ochronny – 350', fn: () => { if (pay(350)) { shields++; store.set('lsj-shield', String(shields)); say('Amulet ocali cię przed jednym dotknięciem.'); } } }
   ]);
 // bankomat – kino
 const DEP_IN = 200, DEP_OUT = 260, DEP_MS = 300000;
@@ -1096,7 +1115,7 @@ kiosk(S.library.x + 6, S.library.z + 6.4, Math.PI, 'BANKOMAT',
     { label: 'Odbierz lokatę', fn: () => { if (!deposit) { say('Nie masz lokaty.'); return; } if (Date.now() - deposit < DEP_MS) { say('Lokata jeszcze pracuje.'); return; } deposit = 0; store.set('lsj-dep', '0'); earn(DEP_OUT); say(`+${DEP_OUT}`); } }
   ]);
 // praca: paczki z przystani na zaplecze
-const JOB_PAY = 150;
+const JOB_PAY = 70;
 kiosk(shoreX + 12, dockZ - 6, 0, 'PRACA: PACZKI', () => [carrying ? 'Masz paczkę' : 'Paczka czeka', 'Cel: zaplecze', `Stawka: ${JOB_PAY}`],
   [{ label: 'Weź paczkę', fn: () => { if (carrying) { say('Masz już paczkę.'); return; } carrying = true; say('Zawieź paczkę na zaplecze techniczne na wschodzie wyspy.'); } }], 0x6b4a32);
 const DROP = { x: S.util.x + 8.2 * Math.sin(0.2), z: S.util.z + 8.2 * Math.cos(0.2) };
@@ -1117,7 +1136,7 @@ npc('Krupierka Wanda', S.temple.x - 3.8, S.temple.z - 1, 0x7a1f6b, ['Automaty od
 npc('Kucharz Bogdan', S.main.x + 15, S.main.z - 5.5, 0xf2f2f2, ['Sklep masz w automacie przy ścianie.', 'Amulet kup. On zawsze kogoś goni.']);
 npc('Ogrodnik Mietek', S.tennis.x + 20, S.tennis.z + 11, 0x3f7a33, ['Słyszysz to buczenie? To znaczy, że jest blisko.', 'Przez ściany przechodzi. Nie chowaj się w budynkach.']);
 npc('Pilot Stefan', S.heli.x - 17, S.heli.z + 3, 0x444b52, ['Helikopter? W serwisie. Od 2019.', 'Bankomat jest w kinie, obok rezydencji.']);
-npc('Ochroniarz Rysiek', DROP.x + 2.6, DROP.z + 0.8, 0x15181c, ['Paczki oddajesz w terminalu. Płacę 150 za sztukę.', 'Autem obrócisz trzy razy szybciej.']);
+npc('Ochroniarz Rysiek', DROP.x + 2.6, DROP.z + 0.8, 0x15181c, ['Paczki oddajesz w terminalu. Płacę 70 za sztukę.', 'Autem obrócisz trzy razy szybciej.']);
 
 // ---------- pojazdy: auto, motorówka, helikopter ----------
 const carIn = { thr: 0, steer: 0, lift: 0 }; let mySeat = -1, myVeh = -1;
@@ -1132,7 +1151,7 @@ function makeVeh(o) {
 function vpart(v, w, h, d, x, y, z, mat, inter) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); v.g.add(m); if (inter) { m.userData = v.ud; INTERACT.push(m); } return m; }
 const glassMat = new THREE.MeshLambertMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.35 });
 const CAR = (() => { const p = safeSpot(shoreX + 24, dockZ - 5); return makeVeh({ kind: 'car', name: 'auto', x: p.x, z: p.z, y: groundAt(p.x, p.z), yaw: -Math.PI / 2, eye: 1.55, max: 16,
-  seats: [[-0.45, -0.2], [0.45, -0.2], [-0.45, 0.9], [0.45, 0.9]], canDrive: () => hasKey, noKey: 'Kluczyki kupisz w sklepie w rezydencji (300).', help: 'W/S gaz, A/D skręt, H klakson, E wysiądź.' }); })();
+  seats: [[-0.45, -0.2], [0.45, -0.2], [-0.45, 0.9], [0.45, 0.9]], canDrive: () => hasKey, noKey: 'Kluczyki kupisz w sklepie w rezydencji (450).', help: 'W/S gaz, A/D skręt, H klakson, E wysiądź.' }); })();
 {
   const v = CAR, paint = lam(0xf2b632), dark = lam(0x1c1c1c);
   vpart(v, 1.9, 0.45, 4.1, 0, 0.6, 0, paint, true);
@@ -1144,7 +1163,7 @@ const CAR = (() => { const p = safeSpot(shoreX + 24, dockZ - 5); return makeVeh(
   const sw = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.025, 6, 14), dark); sw.position.set(-0.45, 1.2, -0.72); v.g.add(sw);
   for (const hx of [-0.65, 0.65]) vpart(v, 0.3, 0.14, 0.05, hx, 0.75, -2.06, basic(0xfff3b0));
 }
-const BOAT = makeVeh({ kind: 'boat', name: 'motorówka', x: shoreX - 50, z: dockZ - 5.6, y: 0, yaw: Math.PI / 2, eye: 1.4, max: 15,
+const BOAT = makeVeh({ kind: 'boat', name: 'motorówka', x: shoreX - 50, z: dockZ - 4.1, y: 0, yaw: Math.PI / 2, eye: 1.4, max: 15,
   seats: [[-0.4, -0.3], [0.4, -0.3], [-0.4, 0.9], [0.4, 0.9]], canDrive: () => true, noKey: '', help: 'W/S gaz, A/D skręt, E wysiądź przy brzegu lub pomoście.' });
 {
   const v = BOAT, white = lam(0xf4f4f4), red = lam(0xc0392b), dark = lam(0x1c1c1c);
@@ -1154,7 +1173,7 @@ const BOAT = makeVeh({ kind: 'boat', name: 'motorówka', x: shoreX - 50, z: dock
   for (const [sx, sz] of v.seats) { vpart(v, 0.6, 0.12, 0.6, sx, 0.72, sz, dark); vpart(v, 0.6, 0.4, 0.1, sx, 0.92, sz + 0.3, dark); }
 }
 const HELI = makeVeh({ kind: 'heli', name: 'helikopter', x: S.heli.x, z: S.heli.z, y: groundAt(S.heli.x, S.heli.z), yaw: 0, eye: 1.5, max: 22,
-  seats: [[-0.4, -0.2], [0.4, -0.2]], canDrive: () => hasHeli, noKey: 'Helikopter jest zepsuty. Naprawa w terminalu SERWIS przy lądowisku (2000).', help: 'W/S lot, A/D obrót, Spacja w górę, C w dół, E wysiądź po wylądowaniu.' });
+  seats: [[-0.4, -0.2], [0.4, -0.2]], canDrive: () => hasHeli && !STORY, noKey: STORY ? 'To wrak. Tym nie odlecisz, szukaj części do statku.' : 'Helikopter jest zepsuty. Naprawa w terminalu SERWIS przy lądowisku (4000).', help: 'W/S lot, A/D obrót, Spacja w górę, C w dół, E wysiądź po wylądowaniu.' });
 {
   const v = HELI, body = lam(0x2f6f73), dark = lam(0x1c1c1c);
   vpart(v, 1.7, 0.5, 2.6, 0, 0.45, 0, body, true); vpart(v, 1.7, 1.0, 1.2, 0, 1.2, 0.7, body, true);
@@ -1279,7 +1298,7 @@ const NCH = 4, CHS = [], chMats = [];
     g.strokeStyle = '#d9d2c6'; g.lineWidth = 3; for (let x = 72; x < 190; x += 16) { g.beginPath(); g.moveTo(x, 236); g.lineTo(x, 290); g.stroke(); }
   });
   for (let i = 0; i < NCH; i++) {
-    const m = new THREE.SpriteMaterial({ transparent: true, map: tex }), sp = new THREE.Sprite(m); sp.scale.set(1.7, 2.34, 1); world.add(sp); chMats.push(m);
+    const m = new THREE.SpriteMaterial({ transparent: true, map: tex }), sp = new THREE.Sprite(m); sp.scale.set(2.1, 2.9, 1); world.add(sp); chMats.push(m);
     const x = S.tennis.x + i * 8, z = S.tennis.z;
     CHS.push({ x, z, tx: x, tz: z, stunUntil: 0, sp, on: i === 0 });
   }
@@ -1294,32 +1313,36 @@ function relocateChaser(i) {
   for (let t = 0; t < 80; t++) {
     const x = -340 + Math.random() * 640, z = -200 + Math.random() * 400;
     if (hLSJ(x, z) < 2) continue;
-    if (pts.every(p => Math.hypot(p.x - x, p.z - z) > 140)) { c.x = c.tx = x; c.z = c.tz = z; return; }
+    if (pts.every(p => Math.hypot(p.x - x, p.z - z) > 110)) { c.x = c.tx = x; c.z = c.tz = z; return; }
   }
   c.x = c.tx = S.tennis.x + i * 8; c.z = c.tz = S.tennis.z;
 }
-function stunChaser(i, send) { CHS[i].stunUntil = performance.now() + 8000; if (send) netSend({ t: 'stun', i }); }
+function stunChaser(i, send) { CHS[i].stunUntil = performance.now() + 5000; if (send) netSend({ t: 'stun', i }); }
 function carHitChasers(v) {
   if (Math.abs(v.speed) <= 5) return; const now = performance.now();
-  for (let i = 0; i < NCH; i++) { const c = CHS[i]; if (c.on && now > c.stunUntil && Math.hypot(v.x - c.x, v.z - c.z) < 2.3) { stunChaser(i, true); earn(25); say('Potrącony! +25. Ogłuszony na 8 sekund.'); beep(150, 0.3, 0.08); } }
+  for (let i = 0; i < NCH; i++) { const c = CHS[i]; if (c.on && now > c.stunUntil && Math.hypot(v.x - c.x, v.z - c.z) < 2.3) { stunChaser(i, true); earn(10); say('Potrącony! +10. Ogłuszony na 5 sekund.'); beep(150, 0.3, 0.08); } }
 }
 function die() {
-  const pos = world.worldToLocal(camera.getWorldPosition(new V3())), fy = feetY();
-  leaveCar(true); carrying = false; hiding = null; race = null; fishing = null; invulnUntil = performance.now() + 7500;
+  const now = performance.now(), pos = world.worldToLocal(camera.getWorldPosition(new V3())), fy = feetY();
+  leaveCar(true); carrying = false; carryPart = -1; hiding = null; race = null; fishing = null;
+  const lost = Math.floor(credits * (STORY ? 0.3 : 0.15)); credits -= lost; saveCredits(); drawAll();
+  if (STORY) lives--;
   myRag = spawnRag(pos.x, fy + 0.7, pos.z, colorFor(NET.id || 'me')); netSend({ t: 'rag', p: [r2(pos.x), r2(fy + 0.7), r2(pos.z)] });
-  if (!renderer.xr.isPresenting) { deadUntil = performance.now() + 1800; deadPos.set(pos.x, fy, pos.z); }
-  toSpawn();
-  flash.style.transition = 'none'; flash.style.opacity = '0.75'; setTimeout(() => { flash.style.transition = 'opacity .8s'; flash.style.opacity = '0'; }, 60);
-  [180, 140, 100, 70].forEach((f, i) => setTimeout(() => beep(f, 0.2, 0.08), i * 130));
-  say('Dopadł cię. Odradzasz się na przystani.');
+  deathAt = now; deadPos.set(pos.x, fy, pos.z);
+  if (STORY && lives <= 0) { eliminated = true; deadUntil = Infinity; } else deadUntil = now + (STORY ? 30000 : 10000);
+  if (renderer.xr.isPresenting) { rig.position.set(deadPos.x, deadPos.y + 60, deadPos.z + 40); VRP.vy = VRP.hx = VRP.hz = 0; }
+  else { PL.vy = PL.hx = PL.hz = 0; if (eliminated && document.pointerLockElement) document.exitPointerLock(); }
+  flash.style.transition = 'none'; flash.style.opacity = '0.8'; setTimeout(() => { flash.style.transition = 'opacity .8s'; flash.style.opacity = '0'; }, 60);
+  scream();
+  say(eliminated ? 'Nie masz już żyć. Koniec gry.' : `Złapany. Tracisz ${lost} monet. Odrodzenie za ${STORY ? 30 : 10} s.` + (STORY ? ` Życia: ${lives}.` : ''));
   KIOSKS.forEach(k => k.draw());
 }
 function chaserUpdate(dt, now) {
   const night = isNight(), banished = now < banishUntil, me = mePos(), auth = isAuth(), fy = feetY();
-  if (night && !wasNight) { if (auth) for (let i = 1; i < NCH; i++) relocateChaser(i); if (me) say(bloodMoon() ? 'Krwawy księżyc. Jest ich czterech i są dwa razy szybsi.' : 'Zapada noc. Przyszło trzech kolejnych.'); }
+  if (night && !wasNight) { if (auth) for (let i = 1; i < NCH; i++) relocateChaser(i); if (me) say(bloodMoon() ? 'Krwawy księżyc. Jest ich czterech i są szybsi niż kiedykolwiek.' : 'Zapada noc. Przyszło trzech kolejnych.'); }
   if (!night && wasNight && me) say('Świta. Nocni goście znikają.');
   wasNight = night;
-  const speed = 2.4 * (night && bloodMoon() ? 2 : 1);
+  const speed = night ? (bloodMoon() ? 6.4 : 5.4) : 4.5;
   const targets = [];
   if (auth) {
     if (me && now > invulnUntil && !hiding) targets.push(me);
@@ -1332,13 +1355,14 @@ function chaserUpdate(dt, now) {
       if (now > c.stunUntil) {
         let best = null, bd = Infinity;
         for (const t of targets) { const d = Math.hypot(t.x - c.x, t.z - c.z); if (d < bd) { bd = d; best = t; } }
-        if (best) { const gx = best.x + Math.cos(i * 1.57) * 0.8 * (i ? 1 : 0), gz = best.z + Math.sin(i * 1.57) * 0.8 * (i ? 1 : 0), gd = Math.hypot(gx - c.x, gz - c.z); if (gd > 0.3) { const k = Math.min(1, speed * dt / gd); c.x += (gx - c.x) * k; c.z += (gz - c.z) * k; } }
+        const fl = nearFlare(c); if (fl) best = fl; if (!best) best = patrol(c);
+        if (best) { const gx = best.x + Math.cos(i * 1.57) * 0.8 * (i ? 1 : 0), gz = best.z + Math.sin(i * 1.57) * 0.8 * (i ? 1 : 0), gd = Math.hypot(gx - c.x, gz - c.z); if (gd > 0.3) { const k = Math.min(1, (best.slow ? speed * 0.4 : speed) * dt / gd); c.x += (gx - c.x) * k; c.z += (gz - c.z) * k; } }
         for (const [bid, b] of BANS) if (Math.hypot(b.x - c.x, b.z - c.z) < 0.9) { removeBanana(bid, true); stunChaser(i, true); break; }
       }
     } else if (Math.hypot(c.tx - c.x, c.tz - c.z) > 30) { c.x = c.tx; c.z = c.tz; }
     else { const k = 1 - Math.exp(-dt * 6); c.x += (c.tx - c.x) * k; c.z += (c.tz - c.z) * k; }
     const gy = Math.max(groundAt(c.x, c.z), 0);
-    c.sp.position.set(c.x, gy + 1.25, c.z);
+    c.sp.position.set(c.x + (Math.random() - 0.5) * 0.3 * scare, gy + 1.5, c.z + (Math.random() - 0.5) * 0.3 * scare); c.sp.scale.set(2.1 * (1 + 0.25 * scare), 2.9 * (1 + 0.25 * scare), 1);
     chMats[i].rotation = now < c.stunUntil ? Math.sin(now / 60) * 0.4 : 0;
     if (!me) continue;
     const d = Math.hypot(me.x - c.x, me.z - c.z); nearest = Math.min(nearest, d);
@@ -1351,7 +1375,7 @@ function chaserUpdate(dt, now) {
   }
   chAcc += dt;
   if (auth && NET.id && chAcc > 0.2) { chAcc = 0; const p = []; for (const c of CHS) p.push(r2(c.x), r2(c.z)); netSend({ t: 'ch', p }); }
-  if (me && nearest < 35) { chBeepT -= dt; if (chBeepT <= 0) { beep(60 + (35 - nearest) * 2, 0.18, 0.02 + 0.08 * (1 - nearest / 35)); chBeepT = 0.2 + nearest / 35; } }
+  scare = me ? clampN(1 - nearest / 45, 0, 1) : 0;
 }
 function extraNet(d) {
   const ok2 = a => Array.isArray(a) && a.length === 2 && a.every(Number.isFinite);
@@ -1369,6 +1393,8 @@ function extraNet(d) {
   else if (d.t === 'rag') { if (okVec(d.p)) spawnRag(d.p[0], d.p[1], d.p[2], colorFor(d.id)); }
   else if (d.t === 'ban') { if (ok2(d.p) && typeof d.b === 'string' && d.b.length <= 16) addBanana(d.b, d.p[0], d.p[1]); }
   else if (d.t === 'banx') { if (typeof d.b === 'string') removeBanana(d.b, false); }
+  else if (d.t === 'win') { if (STORY && Number.isFinite(d.s)) doWin(d.s, false); }
+  else if (d.t === 'flare') { if (ok2(d.p)) addFlare(d.p[0], d.p[1]); }
   else if (d.t === 'race') { if (Number.isFinite(d.s) && playing()) say(`${String(d.n || 'Gracz').slice(0, 16)} ukończył wyścig: ${d.s.toFixed(1)} s`); }
 }
 function gameUpdate(dt) {
@@ -1447,7 +1473,7 @@ function coinsUpdate(dt, now) {
     if (!c.m.visible) { if (now > c.back) c.m.visible = true; else continue; }
     c.m.rotation.y += dt * 2.5;
     if (me && Math.hypot(me.x - c.x, me.z - c.z) < 1.3 && c.y > me.y - 1.95 && c.y < me.y + 0.3) {
-      c.m.visible = false; c.back = now + 180000; earn(10); beep(988, 0.06); setTimeout(() => beep(1319, 0.08), 70);
+      c.m.visible = false; c.back = now + 180000; earn(5); beep(988, 0.06); setTimeout(() => beep(1319, 0.08), 70);
     }
   }
 }
@@ -1456,7 +1482,7 @@ function coinsUpdate(dt, now) {
 function horn() { if (mySeat < 0) return; beep(392, 0.35, 0.07); beep(494, 0.35, 0.05); { const v = VEH[myVeh]; netSend({ t: 'horn', p: [r2(v.x), r2(v.z)] }); } }
 
 // ================= content: dzień/noc, ragdoll, banany, jetpack, kurczaki, kryjówki, kasyno, wędka, questy, sejf, wyścig, golf, Great St. James =================
-const EXTRA_T = new Set(['ch', 'veh', 'die', 'stun', 'horn', 'altar', 'rag', 'ban', 'banx', 'race']);
+const EXTRA_T = new Set(['ch', 'veh', 'die', 'stun', 'horn', 'altar', 'rag', 'ban', 'banx', 'race', 'win', 'flare']);
 function mePos() { return playing() ? world.worldToLocal(camera.getWorldPosition(new V3())) : null; }
 function feetY() { return renderer.xr.isPresenting ? rig.position.y : PL.y; }
 function lookDir() { const d = camera.getWorldDirection(new V3()); d.y = 0; if (d.lengthSq() < 1e-6) d.set(0, 0, -1); return d.normalize(); }
@@ -1479,15 +1505,16 @@ function skyUpdate() {
   HORIZON.copy(DAY_H).lerp(b ? BLOOD_H : NIGHT_H, n); ZENITH.copy(DAY_Z).lerp(b ? BLOOD_Z : NIGHT_Z, n);
   scene.fog.color.copy(HORIZON); scene.background.copy(HORIZON);
   scene.fog.near = mix(1200, b ? 12 : 50, n); scene.fog.far = mix(9000, b ? 240 : 650, n);
+  if (scare > 0) { scene.fog.far = mix(scene.fog.far, Math.min(scene.fog.far, 70), scare * 0.85); scene.fog.near = Math.min(scene.fog.near, scene.fog.far * 0.3); }
   waterMat.uniforms.fogN.value = scene.fog.near; waterMat.uniforms.fogF.value = scene.fog.far;
   waterMat.uniforms.skyC.value.copy(DAY_W).lerp(NIGHT_W, n);
-  sun.intensity = mix(2.0, 0.1, n); hemi.intensity = mix(0.9, 0.2, n);
+  sun.intensity = mix(2.0, 0.06, n); hemi.intensity = mix(0.9, 0.11, n);
   moon.visible = n > 0.3; moonMat.color.set(b ? 0xc21a1a : 0xf5f3e0);
   for (const l of nightLamps) l.intensity = n * 30;
 }
 
 // ---------- ragdoll po śmierci ----------
-const RAGS = []; let myRag = null, deadUntil = 0; const deadPos = new V3();
+const RAGS = []; let myRag = null; const deadPos = new V3();
 function spawnRag(x, y, z, color) {
   const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color });
   g.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.8, 4, 8), m));
@@ -1507,8 +1534,8 @@ function ragsUpdate(dt) {
   }
 }
 function deathCam() {
-  camera.position.set(deadPos.x + 3.5, deadPos.y + 2.5, deadPos.z + 3.5);
-  camera.lookAt(myRag ? myRag.g.position : deadPos);
+  if (performance.now() - deathAt < 2600) { camera.position.set(deadPos.x + 3.5, deadPos.y + 2.5, deadPos.z + 3.5); camera.lookAt(myRag ? myRag.g.position : deadPos); }
+  else { camera.position.set(deadPos.x, deadPos.y + 70, deadPos.z + 45); camera.lookAt(deadPos); }
   $('hint').style.display = 'none';
 }
 
@@ -1571,7 +1598,7 @@ function chickensUpdate(me, dt, now) {
     if (hLSJ(nx, nz) < 1.3 || blocked(nx, nz)) c.dir += 1.5 + Math.random(); else { c.x = nx; c.z = nz; }
     const y = groundAt(c.x, c.z);
     c.g.position.set(c.x, y + Math.abs(Math.sin(now / 90 + c.hx)) * (sp > 2 ? 0.12 : 0.03), c.z); c.g.rotation.y = c.dir + Math.PI;
-    if (d < 1.1 && Math.abs(feetY() - y) < 2) { c.back = now + 60000; c.g.visible = false; earn(20); say('Złapany kurczak! +20'); beep(900, 0.05); setTimeout(() => beep(700, 0.08), 60); }
+    if (d < 1.1 && Math.abs(feetY() - y) < 2) { c.back = now + 60000; c.g.visible = false; earn(10); say('Złapany kurczak! +10'); beep(900, 0.05); setTimeout(() => beep(700, 0.08), 60); }
   }
 }
 
@@ -1590,41 +1617,118 @@ wardrobe(S.main.x - 15, S.main.z - 8.3, 0); wardrobe(S.library.x - 7.9, S.librar
 kiosk(S.main.x + 3.5, S.main.z - 8.4, 0, 'GADŻETY',
   () => [`Kasa: ${credits}`, `Jetpack: ${hasJet ? Math.max(0, jetFuel).toFixed(0) + ' s paliwa' : 'brak'}`, `Banany: ${bananas}`],
   [
-    { label: 'Jetpack – 500', fn: () => { if (hasJet) { say('Jetpack już masz. Trzymaj Spację (w VR: A).'); return; } if (pay(500)) { hasJet = true; store.set('lsj-jet', '1'); say('Jetpack kupiony. Trzymaj Spację (w VR: A). Paliwa starcza na 10 s.'); } } },
-    { label: 'Banany ×3 – 30', fn: () => { if (pay(30)) { bananas += 3; store.set('lsj-ban', String(bananas)); say('Rzucasz klawiszem G (w VR: grip).'); } } }
+    { label: 'Jetpack – 1500', fn: () => { if (hasJet) { say('Jetpack już masz. Trzymaj Spację (w VR: A).'); return; } if (pay(1500)) { hasJet = true; store.set('lsj-jet', '1'); say('Jetpack kupiony. Trzymaj Spację (w VR: A). Paliwa starcza na 10 s.'); } } },
+    { label: 'Banany ×3 – 60', fn: () => { if (pay(60)) { bananas += 3; store.set('lsj-ban', String(bananas)); say('Rzucasz klawiszem G (w VR: grip).'); } } }
   ]);
 kiosk(S.temple.x - 4.7, S.temple.z + 2.2, Math.PI / 2, 'OŁTARZ',
-  () => [performance.now() < banishUntil ? `Spokój: ${Math.ceil((banishUntil - performance.now()) / 1000)} s` : 'Ofiara: 500', 'Odpędza ich', 'na minutę'],
-  [{ label: 'Złóż ofiarę – 500', fn: () => { if (performance.now() < banishUntil) { say('Ofiara jeszcze działa.'); return; } if (pay(500)) { banishUntil = performance.now() + 60000; netSend({ t: 'altar' }); say('Zniknęli. Masz minutę.'); } } }], 0x3a1a4a);
-kiosk(S.heli.x - 17, S.heli.z - 3, Math.PI / 2, 'SERWIS', () => [hasHeli ? 'Helikopter sprawny' : 'Naprawa: 2000', `Kasa: ${credits}`],
-  [{ label: 'Napraw helikopter – 2000', fn: () => { if (hasHeli) { say('Helikopter jest sprawny.'); return; } if (pay(2000)) { hasHeli = true; store.set('lsj-heli', '1'); say('Naprawiony. Możesz pilotować, drugi fotel jest dla pasażera.'); } } }]);
+  () => [performance.now() < banishUntil ? `Spokój: ${Math.ceil((banishUntil - performance.now()) / 1000)} s` : 'Ofiara: 700', 'Odpędza ich', 'na minutę'],
+  [{ label: 'Złóż ofiarę – 700', fn: () => { if (performance.now() < banishUntil) { say('Ofiara jeszcze działa.'); return; } if (pay(700)) { banishUntil = performance.now() + 60000; netSend({ t: 'altar' }); say('Zniknęli. Masz minutę.'); } } }], 0x3a1a4a);
+kiosk(S.heli.x - 17, S.heli.z - 3, Math.PI / 2, 'SERWIS', () => [hasHeli ? 'Helikopter sprawny' : STORY ? 'Wrak' : 'Naprawa: 4000', `Kasa: ${credits}`],
+  [{ label: 'Napraw helikopter – 4000', fn: () => { if (STORY) { say('Brak części. W trybie fabuły helikopter nie poleci.'); return; } if (hasHeli) { say('Helikopter jest sprawny.'); return; } if (pay(4000)) { hasHeli = true; store.set('lsj-heli', '1'); say('Naprawiony. Możesz pilotować, drugi fotel jest dla pasażera.'); } } }]);
 
-// ---------- ruletka i blackjack ----------
-const REDS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]); let rouLast = '-';
-function roulette(kind) {
-  if (!pay(25)) return;
-  const n = rnd(37), col = n === 0 ? 'zielone' : REDS.has(n) ? 'czerwone' : 'czarne';
-  const win = kind === 'z' ? (n === 0 ? 900 : 0) : ((kind === 'r' && col === 'czerwone') || (kind === 'b' && col === 'czarne')) ? 50 : 0;
-  rouLast = `${n} ${col}`; if (win) earn(win); say(`Ruletka: ${n} ${col}. ${win ? 'Wygrana ' + win + '!' : 'Przegrana.'}`);
+// ---------- ruletka i blackjack (fizyczne stoły) ----------
+const casY = groundAt(S.temple.x, S.temple.z), BET = 25;
+const REDS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+function board(w, h, x, y, z, ry) {
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 160; const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex })); m.position.set(x, y, z); m.rotation.y = ry; world.add(m);
+  return (l1, l2) => { const g = cv.getContext('2d'); g.fillStyle = '#0b0b14'; g.fillRect(0, 0, 512, 160); g.strokeStyle = '#d4a62a'; g.lineWidth = 6; g.strokeRect(3, 3, 506, 154); g.fillStyle = '#ffcc33'; g.font = 'bold 38px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(l1, 256, 52); g.fillStyle = '#fff'; g.font = '28px sans-serif'; g.fillText(l2 || '', 256, 112); tex.needsUpdate = true; };
 }
-kiosk(S.temple.x + 4.7, S.temple.z - 3.0, -Math.PI / 2, 'RULETKA', () => [`Kasa: ${credits}`, 'Stawka: 25', `Ostatnio: ${rouLast}`],
-  [{ label: 'Czerwone (×2)', fn: () => roulette('r') }, { label: 'Czarne (×2)', fn: () => roulette('b') }, { label: 'Zero (×36)', fn: () => roulette('z') }], 0x0f5132);
-const BJ = { p: [], d: [], on: false, msg: 'Stawka: 25' };
-const bjName = c => c === 1 ? 'A' : c > 10 ? 'JQK'[c - 11] : String(c);
-function bjSum(h) { let s = 0, a = 0; for (const c of h) { if (c === 1) { a++; s += 11; } else s += Math.min(c, 10); } while (s > 21 && a) { s -= 10; a--; } return s; }
-function bjEnd() {
-  BJ.on = false; while (bjSum(BJ.d) < 17) BJ.d.push(rnd(13) + 1);
-  const p = bjSum(BJ.p), d = bjSum(BJ.d);
-  if (d > 21 || p > d) { earn(50); BJ.msg = 'Wygrana 50!'; } else if (p === d) { earn(25); BJ.msg = 'Remis, zwrot 25'; } else BJ.msg = 'Przegrana';
+const chipGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.014, 14);
+const WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26];
+const ROU = { x: S.temple.x + 3.3, z: S.temple.z - 0.8, bets: { r: [], b: [], z: [] }, pads: {}, spin: null, W: 0 };
+{
+  const wz = ROU.z - 0.55, ty = casY + 0.9;
+  fur(1.4, 0.9, 2.4, ROU.x, casY, ROU.z, 0x0f5132, true);
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.64, 0.6, 0.1, 40), lam(0x3a2414)); rim.position.set(ROU.x, ty + 0.05, wz); world.add(rim);
+  const tex = canvasTex(512, 512, (g) => {
+    const A = Math.PI * 2 / 37; g.fillStyle = '#3a2414'; g.fillRect(0, 0, 512, 512);
+    for (let i = 0; i < 37; i++) {
+      const n = WHEEL[i]; g.fillStyle = n === 0 ? '#0a8f3c' : REDS.has(n) ? '#c0181d' : '#141414';
+      g.beginPath(); g.moveTo(256, 256); g.arc(256, 256, 250, (i - 0.5) * A, (i + 0.5) * A); g.closePath(); g.fill();
+      g.save(); g.translate(256 + Math.cos(i * A) * 218, 256 + Math.sin(i * A) * 218); g.rotate(i * A + Math.PI / 2); g.fillStyle = '#fff'; g.font = 'bold 22px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(n), 0, 0); g.restore();
+    }
+    g.fillStyle = '#5a3d2b'; g.beginPath(); g.arc(256, 256, 150, 0, 7); g.fill(); g.fillStyle = '#d4a62a'; g.beginPath(); g.arc(256, 256, 34, 0, 7); g.fill();
+  });
+  const cg = new THREE.CircleGeometry(0.58, 48); cg.rotateX(-Math.PI / 2);
+  ROU.wheel = new THREE.Mesh(cg, new THREE.MeshBasicMaterial({ map: tex })); ROU.wheel.position.set(ROU.x, ty + 0.105, wz); world.add(ROU.wheel);
+  ROU.ball = new THREE.Mesh(new THREE.SphereGeometry(0.028, 10, 8), basic(0xffffff)); world.add(ROU.ball);
+  ROU.cy = ty + 0.135; ROU.cz = wz; ROU.ballA = 0; ROU.ball.position.set(ROU.x + 0.45, ROU.cy, wz);
+  const ud = { fn: rouSpin, hint: '[E] / klik – zakręć kołem' }; rim.userData = ud; ROU.wheel.userData = ud; INTERACT.push(rim, ROU.wheel);
+  [['r', -0.44, 0xc0181d, 'czerwone (×2)'], ['b', 0, 0x141414, 'czarne (×2)'], ['z', 0.44, 0x0a8f3c, 'zero (×36)']].forEach(([k, ox, col, name]) => {
+    const p = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.02, 0.6), lam(col)); p.position.set(ROU.x + ox, ty + 0.01, ROU.z + 0.7); world.add(p);
+    p.userData = { fn: () => rouBet(k), hint: `[E] / klik – połóż żeton ${BET} na ${name}` }; INTERACT.push(p); ROU.pads[k] = p;
+  });
+  ROU.show = board(0.95, 0.3, ROU.x, casY + 1.55, ROU.z - 1.18, 0); ROU.show('RULETKA', 'Połóż żeton, potem zakręć kołem');
 }
-kiosk(S.temple.x - 4.7, S.temple.z - 3.2, Math.PI / 2, 'BLACKJACK',
-  () => [`Ty: ${BJ.p.map(bjName).join(' ')}${BJ.p.length ? ' = ' + bjSum(BJ.p) : ''}`, `Krupier: ${BJ.on ? bjName(BJ.d[0]) + ' ?' : BJ.d.map(bjName).join(' ') + (BJ.d.length ? ' = ' + bjSum(BJ.d) : '')}`, BJ.msg, `Kasa: ${credits}`],
-  [
-    { label: 'Rozdaj – 25', fn: () => { if (BJ.on) { say('Rozdanie trwa.'); return; } if (!pay(25)) return; BJ.p = [rnd(13) + 1, rnd(13) + 1]; BJ.d = [rnd(13) + 1, rnd(13) + 1]; BJ.on = true; BJ.msg = 'Dobierz albo pas';
-      if (bjSum(BJ.p) === 21) { BJ.on = false; if (bjSum(BJ.d) === 21) { earn(25); BJ.msg = 'Remis, zwrot 25'; } else { earn(63); BJ.msg = 'Blackjack! 63'; } } } },
-    { label: 'Dobierz', fn: () => { if (!BJ.on) return; BJ.p.push(rnd(13) + 1); const s = bjSum(BJ.p); if (s > 21) { BJ.on = false; BJ.msg = 'Fura. Przegrana'; } else if (s === 21) bjEnd(); } },
-    { label: 'Pas', fn: () => { if (BJ.on) bjEnd(); } }
-  ], 0x0f5132);
+function rouBet(k) {
+  if (ROU.spin) return; const st = ROU.bets[k];
+  if (st.length >= 8) { say('Na tym polu leży już 8 żetonów.'); return; }
+  if (!pay(BET)) return;
+  const c = new THREE.Mesh(chipGeo, lam(0xf2d24b)), p = ROU.pads[k].position; c.position.set(p.x, p.y + 0.02 + st.length * 0.015, p.z); world.add(c); st.push(c); beep(900, 0.03);
+}
+function rouSpin() {
+  if (ROU.spin) return;
+  if (!(ROU.bets.r.length + ROU.bets.b.length + ROU.bets.z.length)) { say('Najpierw połóż żeton na jednym z pól.'); return; }
+  ROU.spin = { t: 0, T: 5.5, idx: rnd(37), W0: ROU.W, tick: 0 }; ROU.show('RULETKA', 'Koło się kręci...');
+}
+function rouUpdate(dt) {
+  const s = ROU.spin; if (!s) return;
+  s.t += dt; const k = Math.min(1, s.t / s.T), e = 1 - Math.pow(1 - k, 3), Wend = s.W0 + Math.PI * 6;
+  ROU.W = s.W0 + Math.PI * 6 * e; ROU.wheel.rotation.y = ROU.W;
+  const b = s.idx * Math.PI * 2 / 37 - Wend + Math.PI * 12 * (1 - e), rb = mix(0.54, 0.47, e);
+  ROU.ball.position.set(ROU.x + Math.cos(b) * rb, ROU.cy, ROU.cz + Math.sin(b) * rb);
+  if ((s.tick -= dt) <= 0 && k < 0.92) { beep(1400, 0.015, 0.02); s.tick = 0.05 + 0.3 * e; }
+  if (k < 1) return;
+  ROU.spin = null; const n = WHEEL[s.idx], col = n === 0 ? 'zielone' : REDS.has(n) ? 'czerwone' : 'czarne';
+  const win = (col === 'czerwone' ? ROU.bets.r.length * 2 : 0) * BET + (col === 'czarne' ? ROU.bets.b.length * 2 : 0) * BET + (n === 0 ? ROU.bets.z.length * 36 : 0) * BET;
+  for (const key of ['r', 'b', 'z']) { for (const c of ROU.bets[key]) world.remove(c); ROU.bets[key] = []; }
+  if (win) { earn(win); [659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, 0.1), i * 90)); }
+  ROU.show(`${n} ${col}`, win ? `Wygrana ${win}` : 'Przegrana'); say(`Ruletka: ${n} ${col}. ${win ? 'Wygrana ' + win + '!' : 'Przegrana.'}`);
+}
+const BJT = { x: S.temple.x - 4.2, z: S.temple.z - 3.2, p: [], d: [], on: false, meshes: [], tex: {} };
+const bjSum = h => { let s = 0, a = 0; for (const c of h) { if (c.r === 1) { a++; s += 11; } else s += Math.min(c.r, 10); } while (s > 21 && a) { s -= 10; a--; } return s; };
+const bjCard = () => ({ r: rnd(13) + 1, s: rnd(4) });
+function bjTex(c) {
+  const key = c ? c.r + '_' + c.s : 'back';
+  return BJT.tex[key] || (BJT.tex[key] = canvasTex(96, 136, (g) => {
+    if (!c) { g.fillStyle = '#7a1020'; g.fillRect(0, 0, 96, 136); g.strokeStyle = '#d4a62a'; g.lineWidth = 6; g.strokeRect(8, 8, 80, 120); return; }
+    g.fillStyle = '#fffdf5'; g.fillRect(0, 0, 96, 136); g.fillStyle = c.s % 2 ? '#c0181d' : '#111'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = 'bold 54px sans-serif'; g.fillText(c.r === 1 ? 'A' : c.r > 10 ? 'JQK'[c.r - 11] : String(c.r), 48, 50); g.font = '44px sans-serif'; g.fillText('♠♥♣♦'[c.s], 48, 102);
+  }));
+}
+{
+  const ty = casY + 0.9;
+  fur(1.4, 0.9, 2.0, BJT.x, casY, BJT.z, 0x0f5132, true);
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.07, 0.17), lam(0x7a1020)); deck.position.set(BJT.x + 0.15, ty + 0.035, BJT.z - 0.78); world.add(deck);
+  deck.userData = { fn: bjDeck, hint: `[E] / klik – talia: rozdaj (${BET}) albo dobierz kartę` }; INTERACT.push(deck);
+  const puck = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.04, 18), lam(0xd4a62a)); puck.position.set(BJT.x + 0.45, ty + 0.02, BJT.z + 0.78); world.add(puck);
+  puck.userData = { fn: bjStand, hint: '[E] / klik – żeton PAS: nie dobieram' }; INTERACT.push(puck);
+  BJT.ty = ty; BJT.show = board(0.95, 0.3, BJT.x - 0.67, casY + 1.55, BJT.z, Math.PI / 2); BJT.show('BLACKJACK', `Kliknij talię: stawka ${BET}`);
+}
+function bjRender(msg) {
+  for (const m of BJT.meshes) world.remove(m); BJT.meshes = [];
+  const put = (c, x, i) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.156), new THREE.MeshBasicMaterial({ map: bjTex(c) })); m.rotation.set(-Math.PI / 2, 0, Math.PI / 2); m.position.set(x, BJT.ty + 0.004 + i * 0.001, BJT.z - 0.42 + i * 0.17); world.add(m); BJT.meshes.push(m); };
+  BJT.p.forEach((c, i) => put(c, BJT.x + 0.42, i)); BJT.d.forEach((c, i) => put(BJT.on && i === 1 ? null : c, BJT.x - 0.25, i));
+  BJT.show(`Ty: ${bjSum(BJT.p)}  ·  Krupier: ${BJT.on ? '?' : bjSum(BJT.d)}`, msg);
+}
+function bjFinish() {
+  BJT.on = false; while (bjSum(BJT.d) < 17) BJT.d.push(bjCard());
+  const p = bjSum(BJT.p), d = bjSum(BJT.d); let msg;
+  if (d > 21 || p > d) { earn(BET * 2); msg = `Wygrana ${BET * 2}`; } else if (p === d) { earn(BET); msg = `Remis, zwrot ${BET}`; } else msg = 'Przegrana';
+  bjRender(msg + ' · talia = nowe rozdanie');
+}
+function bjDeck() {
+  beep(1000, 0.03);
+  if (!BJT.on) {
+    if (!pay(BET)) return; BJT.p = [bjCard(), bjCard()]; BJT.d = [bjCard(), bjCard()]; BJT.on = true;
+    if (bjSum(BJT.p) === 21) { BJT.on = false; if (bjSum(BJT.d) === 21) { earn(BET); bjRender(`Remis, zwrot ${BET}`); } else { const w = Math.round(BET * 2.5); earn(w); bjRender(`Blackjack! ${w}`); } return; }
+    bjRender('Talia = dobierz, złoty żeton = pas'); return;
+  }
+  BJT.p.push(bjCard()); const s = bjSum(BJT.p);
+  if (s > 21) { BJT.on = false; bjRender('Fura. Przegrana'); } else if (s === 21) bjFinish(); else bjRender('Talia = dobierz, złoty żeton = pas');
+}
+function bjStand() { if (BJT.on) bjFinish(); }
 
 // ---------- wędkowanie ----------
 let fish = Number(store.get('lsj-fish')) || 0, goldFish = Number(store.get('lsj-gfish')) || 0, fishing = null;
@@ -1633,7 +1737,7 @@ const fishK = kiosk(FISH_P.x, FISH_P.z, Math.PI, 'WĘDKA', () => [`Ryby: ${fish}
   [{ label: 'Zarzuć / zatnij', fn: () => {
     const now = performance.now();
     if (!fishing) { fishing = { biteAt: now + 3000 + Math.random() * 7000, bite: false, until: 0 }; say('Zarzucone. Kliknij jeszcze raz, gdy weźmie.'); }
-    else if (fishing.bite) { fishing = null; if (rnd(10) === 0) { goldFish++; store.set('lsj-gfish', String(goldFish)); say('Złota ryba! Kucharz da za nią 150.'); } else { fish++; store.set('lsj-fish', String(fish)); say('Masz rybę. Sprzedasz ją w kuchni w rezydencji.'); } beep(880, 0.08); }
+    else if (fishing.bite) { fishing = null; if (rnd(10) === 0) { goldFish++; store.set('lsj-gfish', String(goldFish)); say('Złota ryba! W skupie dostaniesz za nią 100.'); } else { fish++; store.set('lsj-fish', String(fish)); say('Masz rybę. Sprzedasz ją w kuchni w rezydencji.'); } beep(880, 0.08); }
     else { fishing = null; say('Za wcześnie. Ryba spłoszona.'); }
   } }], 0x1f3a5f);
 function fishingUpdate(me, now) {
@@ -1642,8 +1746,8 @@ function fishingUpdate(me, now) {
   if (!fishing.bite && now > fishing.biteAt) { fishing.bite = true; fishing.until = now + 2200; say('BIERZE! Zatnij!'); beep(1200, 0.1); fishK.draw(); }
   else if (fishing.bite && now > fishing.until) { fishing = null; say('Uciekła.'); fishK.draw(); }
 }
-kiosk(S.main.x + 19.4, S.main.z + 3, -Math.PI / 2, 'SKUP RYB', () => [`Ryby: ${fish} × 40`, `Złote: ${goldFish} × 150`, `Kasa: ${credits}`],
-  [{ label: 'Sprzedaj wszystko', fn: () => { const sum = fish * 40 + goldFish * 150; if (!sum) { say('Nie masz ryb. Wędka jest na końcu pomostu.'); return; } fish = goldFish = 0; store.set('lsj-fish', '0'); store.set('lsj-gfish', '0'); earn(sum); say(`Sprzedane: +${sum}`); } }]);
+kiosk(S.main.x + 19.4, S.main.z + 3, -Math.PI / 2, 'SKUP RYB', () => [`Ryby: ${fish} × 25`, `Złote: ${goldFish} × 100`, `Kasa: ${credits}`],
+  [{ label: 'Sprzedaj wszystko', fn: () => { const sum = fish * 25 + goldFish * 100; if (!sum) { say('Nie masz ryb. Wędka jest na końcu pomostu.'); return; } fish = goldFish = 0; store.set('lsj-fish', '0'); store.set('lsj-gfish', '0'); earn(sum); say(`Sprzedane: +${sum}`); } }]);
 
 // ---------- przedmioty, questy, sejf ----------
 const ITEMS = [];
@@ -1661,12 +1765,12 @@ function fetchQuest(k, who, offer, remind, reward) {
   return true;
 }
 const NPC_HOOK = {
-  'Ogrodnik Mietek': () => fetchQuest('shears', 'Ogrodnik Mietek', 'Zgubiłem sekator przy willi na północnym wschodzie. Przynieś, dam 200.', 'Sekator leży gdzieś przy willi na północnym wschodzie.', 200),
-  'Kapitan Zenek': () => fetchQuest('rum', 'Kapitan Zenek', 'Na plaży Great St. James została skrzynka rumu. Weź motorówkę z pomostu i przywieź ją, dam 400.', 'Rum czeka na plaży Great St. James, naprzeciwko naszej wyspy.', 400),
+  'Ogrodnik Mietek': () => fetchQuest('shears', 'Ogrodnik Mietek', 'Zgubiłem sekator przy willi na północnym wschodzie. Przynieś, dam 120.', 'Sekator leży gdzieś przy willi na północnym wschodzie.', 120),
+  'Kapitan Zenek': () => fetchQuest('rum', 'Kapitan Zenek', 'Na plaży Great St. James została skrzynka rumu. Weź motorówkę z pomostu i przywieź ją, dam 250.', 'Rum czeka na plaży Great St. James, naprzeciwko naszej wyspy.', 250),
   'Kucharz Bogdan': () => {
     if (Q.fish === 3) return false;
-    if (Q.fish === 0) { Q.fish = 1; saveQ(); say('Kucharz Bogdan: Przynieś mi 3 ryby z pomostu. Zapłacę 250, lepiej niż w skupie.'); }
-    else if (fish >= 3) { fish -= 3; store.set('lsj-fish', String(fish)); Q.fish = 3; saveQ(); earn(250); say('Kucharz Bogdan: Piękne sztuki. Masz 250.'); }
+    if (Q.fish === 0) { Q.fish = 1; saveQ(); say('Kucharz Bogdan: Przynieś mi 3 ryby z pomostu. Zapłacę 150, lepiej niż w skupie.'); }
+    else if (fish >= 3) { fish -= 3; store.set('lsj-fish', String(fish)); Q.fish = 3; saveQ(); earn(150); say('Kucharz Bogdan: Piękne sztuki. Masz 150.'); }
     else say(`Kucharz Bogdan: Czekam na 3 ryby. Masz ${fish}.`);
     return true;
   }
@@ -1680,8 +1784,8 @@ const sr = rng(4242), SAFE_CODE = [0, 1, 2, 3].map(() => Math.floor(sr() * 10)),
   item(x, z, 0xfffbe9, 'przeczytaj notatkę', () => true, () => say(`Notatka: ${i + 1}. cyfra kodu do sejfu to ${SAFE_CODE[i]}. Sejf stoi w salonie rezydencji.`), 0.3));
 kiosk(S.main.x - 19.4, S.main.z + 5, Math.PI / 2, 'SEJF', () => [`Kod: ${safeEntry.join(' ')}`, safeDone ? 'Pusty' : 'Zamknięty', 'Cyfry są w notatkach'],
   [0, 1, 2, 3].map(i => ({ label: `Cyfra ${i + 1}: +1`, fn: () => { safeEntry[i] = (safeEntry[i] + 1) % 10; } })).concat([{ label: 'Otwórz', fn: () => {
-    if (safeDone) { say('Sejf jest już pusty.'); return; }
-    if (safeEntry.every((d, i) => d === SAFE_CODE[i])) { safeDone = true; store.set('lsj-safe', '1'); earn(1500); say('Sejf otwarty: +1500!'); [523, 659, 784, 1046, 1318].forEach((f, i) => setTimeout(() => beep(f, 0.12), i * 100)); }
+    if (safeDone && !partFree(4)) { say('Sejf jest już pusty.'); return; }
+    if (safeEntry.every((d, i) => d === SAFE_CODE[i])) { const gotKey = partFree(4) && takePart(4); if (!safeDone) { safeDone = true; store.set('lsj-safe', '1'); earn(400); say('Sejf otwarty: +400.' + (gotKey ? ' W środku był kluczyk do stacyjki.' : '')); } [523, 659, 784, 1046, 1318].forEach((f, i) => setTimeout(() => beep(f, 0.12), i * 100)); }
     else { say('Zły kod.'); beep(120, 0.3); }
   } }]), 0x555b61);
 
@@ -1689,7 +1793,7 @@ kiosk(S.main.x - 19.4, S.main.z + 5, Math.PI / 2, 'SEJF', () => [`Kod: ${safeEnt
 let race = null, raceBest = Number(store.get('lsj-race')) || 0;
 const CPS = [[-230, 30], [-100, 10], [60, -15], [S.heli.x - 25, S.heli.z], [60, -15], [-100, 10], [-230, 30], [shoreX + 36, dockZ]];
 const beacon = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 40, 16, 1, true), new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide })); beacon.visible = false; world.add(beacon);
-kiosk(shoreX + 31, dockZ - 7, 0, 'WYŚCIG', () => [race ? `Punkt ${race.i + 1}/${CPS.length}` : 'Trasa: lądowisko i z powrotem', `Rekord: ${raceBest ? raceBest.toFixed(1) + ' s' : '-'}`, 'Poniżej 120 s: +200'],
+kiosk(shoreX + 31, dockZ - 7, 0, 'WYŚCIG', () => [race ? `Punkt ${race.i + 1}/${CPS.length}` : 'Trasa: lądowisko i z powrotem', `Rekord: ${raceBest ? raceBest.toFixed(1) + ' s' : '-'}`, 'Poniżej 120 s: +100'],
   [{ label: 'Start', fn: () => { race = { i: 0, t0: performance.now() }; say('Start! Wsiadaj do auta i jedź przez żółte słupy światła.'); beep(880, 0.2); } }, { label: 'Przerwij', fn: () => { race = null; } }], 0x8a1c1c);
 function raceUpdate(now) {
   beacon.visible = !!race; if (!race) return;
@@ -1699,8 +1803,8 @@ function raceUpdate(now) {
   const t = (now - race.t0) / 1000; race.i++; beep(988, 0.1);
   if (race.i < CPS.length) { say(`Punkt ${race.i}/${CPS.length} · ${t.toFixed(1)} s`); return; }
   race = null; let msg = `Meta: ${t.toFixed(1)} s.`, prize = 0;
-  if (t < 120) { prize += 200; msg += ' Poniżej 120 s: +200.'; }
-  if (!raceBest || t < raceBest) { raceBest = t; store.set('lsj-race', String(t)); prize += 100; msg += ' Nowy rekord: +100.'; }
+  if (t < 120) { prize += 100; msg += ' Poniżej 120 s: +100.'; }
+  if (!raceBest || t < raceBest) { raceBest = t; store.set('lsj-race', String(t)); prize += 50; msg += ' Nowy rekord: +50.'; }
   if (prize) earn(prize); say(msg); netSend({ t: 'race', n: myName(), s: r2(t) });
 }
 
@@ -1738,7 +1842,7 @@ function golfUpdate(dt) {
   const g = groundAt(b.x, b.z); b.y = g + 0.16;
   if (g < 0.2) { say('Piłka w wodzie. Wraca na start.'); golfReset(); return; }
   if (Math.hypot(b.x - GOLF.hole.x, b.z - GOLF.hole.z) < 0.5 && sp < 7) {
-    const prize = GOLF.strokes <= 1 ? 300 : GOLF.strokes === 2 ? 150 : GOLF.strokes === 3 ? 80 : 30;
+    const prize = GOLF.strokes <= 1 ? 120 : GOLF.strokes === 2 ? 60 : GOLF.strokes === 3 ? 30 : 10;
     earn(prize); say(`Dołek w ${GOLF.strokes} uderzeniach: +${prize}`); [659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, 0.1), i * 90));
     GOLF.strokes = 0; golfReset(); golfNewHole(); return;
   }
@@ -1758,20 +1862,169 @@ const gsjG = new THREE.Group(); world.add(gsjG);
   }
   scrub.count = k; scrub.frustumCulled = false; gsjG.add(scrub);
   const cy = groundAt(GSJ.x, GSJ.z), chest = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.8), lam(0x8a5a2b)); chest.position.set(GSJ.x, cy + 0.4, GSJ.z); gsjG.add(chest);
-  chest.userData = { fn: () => { const last = Number(store.get('lsj-chest')) || 0, left = 600000 - (Date.now() - last); if (left > 0) { say(`Skrzynia pusta. Wróć za ${Math.ceil(left / 60000)} min.`); return; } store.set('lsj-chest', String(Date.now())); earn(300); say('Skarb z Great St. James: +300!'); }, hint: '[E] / klik – otwórz skrzynię' };
+  chest.userData = { fn: () => { if (partFree(5) && takePart(5)) return; const last = Number(store.get('lsj-chest')) || 0, left = 600000 - (Date.now() - last); if (left > 0) { say(`Skrzynia pusta. Wróć za ${Math.ceil(left / 60000)} min.`); return; } store.set('lsj-chest', String(Date.now())); earn(150); say('Skarb z Great St. James: +150!'); }, hint: '[E] / klik – otwórz skrzynię' };
   INTERACT.push(chest);
   const tag = labelSprite('SKARB', 6, 1.3); tag.position.set(GSJ.x, cy + 6, GSJ.z); gsjG.add(tag);
 }
 
 function extrasUpdate(dt, now) {
   const me = mePos();
-  skyUpdate(); ragsUpdate(dt); bananasUpdate(me, now); chickensUpdate(me, dt, now); fishingUpdate(me, now); raceUpdate(now); golfUpdate(dt);
+  skyUpdate(); ragsUpdate(dt); bananasUpdate(me, now); chickensUpdate(me, dt, now); fishingUpdate(me, now); raceUpdate(now); golfUpdate(dt); rouUpdate(dt); fxUpdate(dt, now);
   for (const it of ITEMS) { it.m.position.y = it.activeFn() ? it.y : -999; it.m.rotation.y += dt; }
   if (hiding && (!me || Math.hypot(me.x - hiding.x, me.z - hiding.z) > 1.9)) { hiding = null; if (me) say('Wyszedłeś z kryjówki.'); }
   hideOv.style.opacity = hiding && !renderer.xr.isPresenting ? '0.6' : '0';
   gsjG.visible = farMesh.visible;
 }
-window.LSJ_DEBUG = { time: v => { timeOverride = v; }, blood: v => { bloodOverride = v; }, state: () => ({ mode, mySeat, myVeh, night: isNight(), ch: CHS.map(c => [c.on, Math.round(c.x), Math.round(c.z)]), veh: VEH.map(v => [v.kind, Math.round(v.x), Math.round(v.z), +v.y.toFixed(1), +hNear(v.x, v.z).toFixed(1)]), rum: [Math.round(rumP.x), Math.round(rumP.z)], kiosks: KIOSKS.length, chk: CHK.length, items: ITEMS.length, pl: [Math.round(PL.x), +PL.y.toFixed(1), Math.round(PL.z)] }) };
+window.LSJ_DEBUG = { time: v => { if (isAdmin()) timeOverride = v; }, blood: v => { if (isAdmin()) bloodOverride = v; }, look: v => { if (isAdmin()) pitch = v; }, lives: () => lives, state: () => ({ mode, mySeat, myVeh, night: isNight(), ch: CHS.map(c => [c.on, Math.round(c.x), Math.round(c.z)]), veh: VEH.map(v => [v.kind, Math.round(v.x), Math.round(v.z), +v.y.toFixed(1), +hNear(v.x, v.z).toFixed(1)]), rum: [Math.round(rumP.x), Math.round(rumP.z)], kiosks: KIOSKS.length, chk: CHK.length, items: ITEMS.length, pl: [Math.round(PL.x), +PL.y.toFixed(1), Math.round(PL.z)] }) };
+
+// ================= tryb fabularny, życia, kondycja, strach, flary, latarka, admin =================
+const isAdmin = () => myName() === 'Jeffrey Epstein';
+let lives = 3, stamina = 1, staminaLock = 0, sprintT = 0, scare = 0, deathAt = 0, hudT = 0, hbT = 0, flashOn = false;
+const runStart = Date.now();
+function moveSpeed(sprint, dt, base, fast) {
+  const now = performance.now(), energized = now < boostUntil; let sp = base;
+  if (sprint && stamina > 0 && now > staminaLock) { sp = fast; sprintT = now; if (!energized) { stamina -= dt / 5; if (stamina <= 0) { stamina = 0; staminaLock = now + 2500; } } }
+  return sp * (energized ? 1.25 : 1);
+}
+
+// ---------- interfejs: tryb, HUD, nakładki ----------
+const mk = (css, parent = document.body) => { const d = document.createElement('div'); d.style.cssText = css; parent.appendChild(d); return d; };
+const vig = mk('position:absolute;inset:0;pointer-events:none;opacity:0;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 30%,rgba(110,0,0,.95) 100%)');
+const hud = mk('position:absolute;left:14px;bottom:14px;color:#fff;font:600 15px system-ui,sans-serif;text-shadow:0 1px 3px #000;pointer-events:none;display:none');
+const deathOv = mk('position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:#fff;font:700 26px system-ui,sans-serif;text-shadow:0 2px 6px #000;background:rgba(40,0,0,.35);text-align:center');
+const deathTxt = mk('', deathOv);
+const againBtn = document.createElement('button'); againBtn.textContent = 'Nowa gra'; againBtn.style.cssText = 'display:none;font:700 18px system-ui;padding:10px 22px;border:0;border-radius:10px;background:#2f6f73;color:#fff;cursor:pointer'; againBtn.onclick = () => location.reload(); deathOv.appendChild(againBtn);
+{
+  $('btnWalk').textContent = 'GRAJ';
+  const row = document.createElement('div'); row.className = 'row';
+  for (const [m, label] of [['story', 'Fabuła: ucieczka'], ['free', 'Freegame (save)']]) {
+    const b = document.createElement('button'); b.className = 'b'; b.textContent = label; b.style.background = GAME_MODE === m ? '#c0392b' : '#1d2b38';
+    b.onclick = () => { if (GAME_MODE === m) return; try { localStorage.setItem('lsj-mode', m); } catch (e) { } location.reload(); }; row.appendChild(b);
+  }
+  $('btnWalk').parentElement.after(row);
+  const info = document.createElement('p'); info.className = 'note'; info.style.margin = '0 0 6px';
+  info.textContent = STORY ? 'Fabuła: jedno podejście, 3 życia, bez zapisu. Zbierz 7 części, napraw statek i odpłyń.' : 'Freegame: bez limitu żyć, postęp zapisuje się w przeglądarce.'; row.after(info);
+  const adm = document.createElement('div'); adm.className = 'row'; const ab = document.createElement('button'); ab.className = 'b'; ab.textContent = 'Admin: +1000 kasy'; ab.onclick = () => { if (isAdmin()) earn(1000); }; adm.appendChild(ab); info.after(adm);
+  const tpBox = $('tplist').parentElement, refresh = () => { const a = isAdmin(); adm.style.display = a ? '' : 'none'; tpBox.style.display = a ? '' : 'none'; };
+  $('nick').addEventListener('input', refresh); refresh();
+}
+
+// ---------- dźwięk: dron, pisk, bicie serca, krzyk ----------
+let SFX = null;
+function sfxInit() {
+  if (SFX) return;
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume();
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 140; const dg = AC.createGain(); dg.gain.value = 0; lp.connect(dg); dg.connect(AC.destination);
+    for (const f of [55, 58.3, 82.6]) { const o = AC.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.connect(lp); o.start(); }
+    const sg = AC.createGain(); sg.gain.value = 0; sg.connect(AC.destination);
+    for (const f of [1245, 1321, 1867]) { const o = AC.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(sg); o.start(); }
+    SFX = { lp, dg, sg };
+  } catch (e) { }
+}
+addEventListener('pointerdown', sfxInit); addEventListener('keydown', sfxInit);
+function thump(v) {
+  try { const t = AC.currentTime; for (const off of [0, 0.17]) { const o = AC.createOscillator(), g = AC.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(72, t + off); o.frequency.exponentialRampToValueAtTime(36, t + off + 0.12); g.gain.setValueAtTime(v, t + off); g.gain.exponentialRampToValueAtTime(0.0001, t + off + 0.15); o.connect(g); g.connect(AC.destination); o.start(t + off); o.stop(t + off + 0.17); } } catch (e) { }
+}
+function scream() {
+  try {
+    const t = AC.currentTime, n = AC.sampleRate * 1.1, buf = AC.createBuffer(1, n, AC.sampleRate), d = buf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = AC.createBufferSource(); src.buffer = buf; const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.2; bp.frequency.setValueAtTime(2600, t); bp.frequency.exponentialRampToValueAtTime(500, t + 1.0);
+    const g = AC.createGain(); g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.05); src.connect(bp); bp.connect(g); g.connect(AC.destination); src.start(t);
+    const o = AC.createOscillator(), og = AC.createGain(); o.type = 'sawtooth'; o.frequency.setValueAtTime(980, t); o.frequency.exponentialRampToValueAtTime(140, t + 0.9); og.gain.setValueAtTime(0.22, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.95); o.connect(og); og.connect(AC.destination); o.start(t); o.stop(t + 1);
+  } catch (e) { }
+}
+
+// ---------- flary i latarka ----------
+const FLARES = []; let flares = Number(store.get('lsj-flare')) || 0;
+function addFlare(x, z) { if (FLARES.length > 20) return; const m = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), basic(0xff3b1f)); m.position.set(x, Math.max(groundAt(x, z), 0) + 0.5, z); world.add(m); FLARES.push({ x, z, m, until: performance.now() + 12000 }); }
+function nearFlare(c) { for (const f of FLARES) if (Math.hypot(f.x - c.x, f.z - c.z) < 60) return f; return null; }
+function throwFlare() {
+  if (!playing() || mySeat >= 0) return;
+  if (flares <= 0) { say('Nie masz flar. Kup w automacie CZĘŚCI w rezydencji.'); return; }
+  const me = mePos(), d = lookDir(), x = me.x + d.x * 8, z = me.z + d.z * 8; flares--; store.set('lsj-flare', String(flares)); addFlare(x, z); netSend({ t: 'flare', p: [r2(x), r2(z)] }); beep(300, 0.25, 0.06);
+}
+function patrol(c) {
+  if (!c.w || Math.hypot(c.w.x - c.x, c.w.z - c.z) < 3) for (let t = 0; t < 30; t++) { const x = -340 + Math.random() * 640, z = -200 + Math.random() * 400; if (hLSJ(x, z) > 2) { c.w = { x, z, slow: true }; break; } }
+  return c.w || null;
+}
+const spot = new THREE.SpotLight(0xfff2cc, 0, 38, 0.5, 0.6, 1.4); camera.add(spot); camera.add(spot.target); spot.target.position.set(0, 0, -1);
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || mode !== 'walk') return;
+  if (e.code === 'KeyF') { flashOn = !flashOn; beep(1200, 0.02); }
+  if (e.code === 'KeyT') throwFlare();
+});
+
+// ---------- części statku i ucieczka ----------
+const PART_NAMES = ['Akumulator', 'Śruba napędowa', 'Świece zapłonowe', 'Kanister paliwa', 'Kluczyk do stacyjki', 'Mapa morska', 'Pompa zęzowa'];
+const PART_HINT = ['Akumulator leży przy budynkach zaplecza technicznego na wschodzie.', 'Śruba napędowa jest na plaży Great St. James. Popłyń motorówką.', 'Świece zapłonowe leżą przy willi na północy wyspy.', 'Kanister paliwa kupisz w automacie CZĘŚCI w rezydencji.', 'Kluczyk do stacyjki jest w sejfie w salonie. Kod znajdziesz w czterech notatkach.', 'Mapa morska jest w skrzyni na szczycie Great St. James.', 'Pompa zęzowa pojawia się przy korcie tenisowym tylko nocą.'];
+const NPARTS = PART_NAMES.length, ALL_PARTS = (1 << NPARTS) - 1;
+let delivered = 0, carryPart = -1;
+const bitCount = v => { let n = 0; for (let i = 0; i < NPARTS; i++) if (v & (1 << i)) n++; return n; };
+function partFree(k) { return STORY && !(delivered & (1 << k)) && carryPart !== k; }
+function takePart(k) {
+  if (!STORY) return false;
+  if (delivered & (1 << k)) { say('Ta część jest już zamontowana.'); return false; }
+  if (carryPart >= 0) { say(`Niesiesz już: ${PART_NAMES[carryPart]}. Najpierw zanieś ją na statek.`); return false; }
+  carryPart = k; say(`Masz: ${PART_NAMES[k]}. Zanieś na statek na końcu pomostu. Jeśli zginiesz, część wraca na miejsce.`); beep(660, 0.08); return true;
+}
+item(S.util2.x, S.util2.z + 10, 0xff7a00, 'weź akumulator', () => partFree(0), () => takePart(0), 0.45);
+item(rumP.x + 5, rumP.z, 0xff7a00, 'weź śrubę napędową', () => partFree(1), () => takePart(1), 0.45);
+item(S.g2.x - 12, S.g2.z - 9, 0xff7a00, 'weź świece zapłonowe', () => partFree(2), () => takePart(2), 0.45);
+item(S.tennis.x + 5, S.tennis.z + 13, 0xff7a00, 'weź pompę zęzową', () => partFree(6) && isNight(), () => takePart(6), 0.45);
+kiosk(S.main.x + 2.1, S.main.z - 8.4, 0, 'CZĘŚCI', () => [`Kasa: ${credits}`, `Flary: ${flares}`, STORY ? ((delivered & 8) ? 'Paliwo: zamontowane' : 'Paliwo: brak') : 'Paliwo: tylko fabuła'],
+  [
+    { label: 'Kanister paliwa – 700', fn: () => { if (!STORY) { say('Kanister przydaje się tylko w trybie fabuły.'); return; } if (delivered & 8) { say('Paliwo jest już na statku.'); return; } if (carryPart >= 0) { say(`Niesiesz już: ${PART_NAMES[carryPart]}.`); return; } if (pay(700)) takePart(3); } },
+    { label: 'Flara – 120', fn: () => { if (pay(120)) { flares++; store.set('lsj-flare', String(flares)); say('Flara odciąga ich na 12 sekund. Rzucasz klawiszem T (w VR: wciśnij prawą gałkę).'); } } }
+  ]);
+let won = 0;
+const winOv = mk('position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#fff;font:800 34px system-ui,sans-serif;text-shadow:0 2px 6px #000;background:rgba(0,40,60,.55);text-align:center');
+const winTxt = mk('', winOv); { const b = againBtn.cloneNode(true); b.style.display = ''; b.onclick = () => location.reload(); winOv.appendChild(b); }
+function doWin(sec, send) {
+  if (won) return; won = sec; gameWon = true; leaveCar(true);
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  winTxt.textContent = `Uciekliście z wyspy! Czas: ${m}:${String(s).padStart(2, '0')}`; winOv.style.display = 'flex';
+  if (document.pointerLockElement) document.exitPointerLock();
+  if (renderer.xr.isPresenting) say(`Uciekliście z wyspy! Czas: ${m}:${String(s).padStart(2, '0')}`);
+  [523, 659, 784, 1046, 1318].forEach((f, i) => setTimeout(() => beep(f, 0.18), i * 130));
+  if (send) netSend({ t: 'win', s: sec });
+}
+kiosk(shoreX - 68.2, dockZ + 6, Math.PI / 2, 'STATEK',
+  () => { if (!STORY) return ['Tryb freegame', 'Ucieczka działa', 'tylko w fabule']; const miss = []; for (let i = 0; i < NPARTS; i++) if (!(delivered & (1 << i))) miss.push(PART_NAMES[i]); return [`Części: ${bitCount(delivered)}/${NPARTS}`, ...miss.slice(0, 3), miss.length > 3 ? `...i ${miss.length - 3} więcej` : (miss.length ? '' : 'Gotowy do drogi!')]; },
+  [
+    { label: 'Zamontuj część', fn: () => { if (!STORY) return; if (carryPart < 0) { say('Nie niesiesz żadnej części.'); return; } delivered |= 1 << carryPart; say(`Zamontowano: ${PART_NAMES[carryPart]}. Części: ${bitCount(delivered)}/${NPARTS}.`); carryPart = -1; [523, 784].forEach((f, i) => setTimeout(() => beep(f, 0.12), i * 110)); } },
+    { label: 'Wskazówka', fn: () => { if (!STORY) return; for (let i = 0; i < NPARTS; i++) if (!(delivered & (1 << i)) && carryPart !== i) { say(PART_HINT[i]); return; } say(carryPart >= 0 ? 'Zamontuj niesioną część.' : 'Statek gotowy. Odpływajcie!'); } },
+    { label: 'Odpłyń', fn: () => { if (!STORY) return; if (delivered !== ALL_PARTS) { say(`Statek nie popłynie. Brakuje części: ${NPARTS - bitCount(delivered)}.`); return; } doWin((Date.now() - runStart) / 1000, true); } }
+  ], 0x1f3a5f);
+
+// ---------- mapa głębokości dla wody (miękki brzeg zamiast migotania) ----------
+{
+  const W = 420, H = 400, data = new Uint8Array(W * H * 4);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) { const h = hNear(-1400 + (i + 0.5) / W * 2100, -1400 + (j + 0.5) / H * 2000), v = Math.round(clampN((h + 4) / 8, 0, 1) * 255), k = (j * W + i) * 4; data[k] = data[k + 1] = data[k + 2] = v; data[k + 3] = 255; }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat); tex.magFilter = tex.minFilter = THREE.LinearFilter; tex.needsUpdate = true; waterMat.uniforms.hmap.value = tex;
+}
+
+function fxUpdate(dt, now) {
+  if (now - sprintT > 800 && stamina < 1) stamina = Math.min(1, stamina + dt / 10);
+  if (!playing()) scare = 0;
+  if (deadUntil && deadUntil !== Infinity && now >= deadUntil) { deadUntil = 0; toSpawn(); invulnUntil = now + 6000; say(STORY ? `Wracasz do gry. Życia: ${lives}` : 'Wracasz do gry.'); }
+  vig.style.opacity = renderer.xr.isPresenting ? '0' : String(Math.pow(scare, 1.4));
+  if ((hudT -= dt) <= 0) {
+    hudT = 0.2; const xr = renderer.xr.isPresenting, inGame = mode === 'walk' && !xr;
+    hud.style.display = inGame ? 'block' : 'none';
+    if (inGame) hud.innerHTML = (STORY ? '<span style="color:#ff4d4d;font-size:20px">' + '♥'.repeat(Math.max(0, lives)) + '</span><span style="opacity:.3;font-size:20px">' + '♥'.repeat(3 - Math.max(0, lives)) + '</span> &nbsp; ' : '')
+      + `<span style="display:inline-block;width:120px;height:8px;background:rgba(255,255,255,.25);border-radius:4px;vertical-align:middle"><span style="display:block;height:8px;border-radius:4px;width:${Math.round(stamina * 120)}px;background:${now < staminaLock ? '#e74c3c' : '#f1c40f'}"></span></span>`
+      + (STORY ? ` &nbsp; Części ${bitCount(delivered)}/${NPARTS}` + (carryPart >= 0 ? ` · niesiesz: ${PART_NAMES[carryPart]}` : '') : '');
+    const dead = deadUntil > 0 && !xr && !won;
+    deathOv.style.display = dead ? 'flex' : 'none';
+    if (dead) { deathTxt.textContent = eliminated ? 'Nie masz już żyć. Koniec gry.' : `Złapany. Odrodzenie za ${Math.max(0, Math.ceil((deadUntil - now) / 1000))} s` + (STORY ? ` · życia: ${lives}` : ''); againBtn.style.display = eliminated ? '' : 'none'; }
+  }
+  if (SFX) { try { const t = AC.currentTime, hi = scare > 0.5 ? (scare - 0.5) * 0.09 : 0; SFX.dg.gain.setTargetAtTime(playing() ? 0.012 + nightAmt() * 0.03 + 0.22 * scare * scare : 0, t, 0.25); SFX.lp.frequency.setTargetAtTime(130 + 1500 * scare, t, 0.25); SFX.sg.gain.setTargetAtTime(hi * (0.6 + 0.4 * Math.sin(now / 40)), t, 0.03); } catch (e) { } }
+  if (scare > 0.08) { hbT -= dt; if (hbT <= 0) { thump(0.12 + 0.35 * scare); hbT = 1.1 - 0.82 * scare; } }
+  for (let i = FLARES.length - 1; i >= 0; i--) { const f = FLARES[i]; f.m.scale.setScalar(1 + 0.3 * Math.sin(now / 50)); if (now > f.until) { world.remove(f.m); FLARES.splice(i, 1); } }
+  spot.intensity = (flashOn || (renderer.xr.isPresenting && nightAmt() > 0.5)) ? 60 : 0;
+  waterMat.uniforms.wsc.value.set(water.scale.x, water.scale.z);
+}
 
 // ================= pętla =================
 updateSun();
