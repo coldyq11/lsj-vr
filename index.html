@@ -2321,10 +2321,10 @@ function revived(d) {
 const EV = { stormUntil: 0, hunt: null, drop: null, next: Date.now() + (STORY ? 150000 : 120000) + Math.random() * 90000, boltT: 5 };
 const storming = () => performance.now() < EV.stormUntil;
 function huntR(id, r) { return EV.hunt && EV.hunt.id === id && performance.now() < EV.hunt.until ? 1e6 : r; }
-const rainGeo = new THREE.BufferGeometry(), RAIN_N = 2200, rainPos = new Float32Array(RAIN_N * 3);
-for (let i = 0; i < RAIN_N; i++) { rainPos[i * 3] = (Math.random() - 0.5) * 70; rainPos[i * 3 + 1] = Math.random() * 30; rainPos[i * 3 + 2] = (Math.random() - 0.5) * 70; }
+const rainGeo = new THREE.BufferGeometry(), RAIN_N = 1800, rainPos = new Float32Array(RAIN_N * 6);
+for (let i = 0; i < RAIN_N; i++) { const x = (Math.random() - 0.5) * 60, y = Math.random() * 30, z = (Math.random() - 0.5) * 60; rainPos.set([x, y, z, x + 0.05, y - 0.7, z], i * 6); }
 rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
-const rain = new THREE.Points(rainGeo, new THREE.PointsMaterial({ color: 0xaac8e8, size: 0.09, transparent: true, opacity: 0.7, depthWrite: false })); rain.visible = false; rain.frustumCulled = false; scene.add(rain);
+const rain = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({ color: 0xb8d0ea, transparent: true, opacity: 0.55, depthWrite: false })); rain.visible = false; rain.frustumCulled = false; scene.add(rain);
 const bolt = mk('position:absolute;inset:0;background:#e8f0ff;opacity:0;pointer-events:none;transition:opacity .25s');
 function startEvent(k, d, local) {
   const now = performance.now();
@@ -2362,7 +2362,7 @@ function eventsUpdate(dt, now) {
   const st = storming(); rain.visible = st && (mode === 'walk' || mode === 'life');
   if (rain.visible) {
     const c = camera.getWorldPosition(new V3()); rain.position.set(c.x, c.y - 12, c.z);
-    for (let i = 0; i < RAIN_N; i++) { rainPos[i * 3 + 1] -= 26 * dt; if (rainPos[i * 3 + 1] < 0) rainPos[i * 3 + 1] += 30; }
+    for (let i = 0; i < RAIN_N; i++) { const k = i * 6; rainPos[k + 1] -= 26 * dt; rainPos[k + 4] -= 26 * dt; if (rainPos[k + 1] < 0) { rainPos[k + 1] += 30; rainPos[k + 4] += 30; } }
     rainGeo.attributes.position.needsUpdate = true;
     if ((EV.boltT -= dt) <= 0) { EV.boltT = 5 + Math.random() * 9; bolt.style.transition = 'none'; bolt.style.opacity = renderer.xr.isPresenting ? '0' : '0.7'; hemi.intensity += 3; setTimeout(() => { bolt.style.transition = 'opacity .5s'; bolt.style.opacity = '0'; }, 70); setTimeout(thunder, 400 + Math.random() * 1500); }
   }
@@ -2416,11 +2416,12 @@ const starGeo = new THREE.BufferGeometry(), starPos = new Float32Array(900 * 3);
 for (let i = 0; i < 900; i++) { const u = Math.random(), v = Math.random() * 0.9 + 0.08, th = u * Math.PI * 2, ph = Math.acos(1 - v); starPos[i * 3] = Math.sin(ph) * Math.cos(th) * 12000; starPos[i * 3 + 1] = Math.cos(ph) * 12000; starPos[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * 12000; }
 starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
 const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 2.2, sizeAttenuation: false, transparent: true, opacity: 0, fog: false, depthWrite: false })); stars.frustumCulled = false; scene.add(stars);
+const STORM_H = new THREE.Color(0x4d5560), STORM_Z = new THREE.Color(0x2a3038);
 function skyExtras(dt) {
   const n = nightAmt(), st = storming();
   stars.material.opacity = n * (st ? 0 : 0.9); stars.position.copy(camera.getWorldPosition(new V3()));
   for (const c of CLOUDS) { c.position.x += dt * 12; if (c.position.x > 7000) c.position.x = -7000; c.material.opacity = st ? 0.95 : mix(0.85, 0.12, n); c.material.color.set(st ? 0x6a7280 : 0xffffff); }
-  if (st) { scene.fog.far = Math.min(scene.fog.far, 300); scene.fog.near = Math.min(scene.fog.near, 40); sun.intensity *= 0.35; waterMat.uniforms.fogN.value = scene.fog.near; waterMat.uniforms.fogF.value = scene.fog.far; }
+  if (st) { HORIZON.lerp(STORM_H, 0.8); ZENITH.lerp(STORM_Z, 0.85); scene.fog.color.copy(HORIZON); scene.background.copy(HORIZON); hemi.intensity *= 0.6; scene.fog.far = Math.min(scene.fog.far, 300); scene.fog.near = Math.min(scene.fog.near, 40); sun.intensity *= 0.35; waterMat.uniforms.fogN.value = scene.fog.near; waterMat.uniforms.fogF.value = scene.fog.far; }
   for (const m of WIN_MATS) m.emissiveIntensity = n * (powerOn() ? 1.3 : 0);
 }
 
